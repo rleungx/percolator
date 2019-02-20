@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time;
+use std::thread;
+use std::time::{self, Duration};
+
+const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(60).as_nanos() as u64;
+const BACKOFF_TIME_MS: u64 = 500;
 
 type Key = (Vec<u8>, u64);
 
@@ -60,6 +64,12 @@ impl KvTable {
     }
 
     #[inline]
+    pub fn put_write(&mut self, key: Vec<u8>, commit_ts: u64, start_ts: u64) {
+        let map_key = (key, commit_ts);
+        let _ = self.write.insert(map_key, start_ts);
+    }
+
+    #[inline]
     pub fn put_data(&mut self, key: Vec<u8>, start_ts: u64, value: Vec<u8>) {
         let map_key = (key, start_ts);
         let _ = self.data.insert(map_key, value);
@@ -72,9 +82,14 @@ impl KvTable {
     }
 
     #[inline]
-    pub fn put_write(&mut self, key: Vec<u8>, commit_ts: u64, start_ts: u64) {
-        let map_key = (key, commit_ts);
-        let _ = self.write.insert(map_key, start_ts);
+    pub fn erase_data(&mut self, key: Vec<u8>, commit_ts: u64) {
+        let l = self.data.clone();
+
+        for (map_key, _) in l.iter() {
+            if key.as_slice() == map_key.0.as_slice() && map_key.1 <= commit_ts {
+                let _ = self.data.remove(&map_key);
+            }
+        }
     }
 
     #[inline]
@@ -86,6 +101,17 @@ impl KvTable {
                 let _ = self.lock.remove(&map_key);
             }
         }
+    }
+
+    pub fn get_uncommitted_keys(&self, ts: u64, primary: Vec<u8>) -> Vec<Key> {
+        let mut keys: Vec<Key> = vec![];
+        for (map_key, v) in self.lock.iter() {
+            if *v == primary && map_key.1 == ts {
+                keys.push((*map_key).clone());
+            }
+        }
+
+        keys
     }
 }
 
@@ -117,6 +143,7 @@ impl crate::Store for MemoryStorage {
 #[derive(Debug)]
 struct Write(Vec<u8>, Vec<u8>);
 
+// TODO: For each transaction, we need to limit its max execution time. 
 pub struct MemoryStorageTransaction {
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
@@ -128,12 +155,10 @@ impl crate::Transaction for MemoryStorageTransaction {
         loop {
             let snapshot = self.data.lock().unwrap().clone();
 
-            if let Some(r) = snapshot.get_lock(key.clone(), None, Some(self.start_ts)) {
-                if (*r.0).1 < self.start_ts {
-                    // Check for locks that signal concurrent writes.
-                    // TODO: BackOffAndMaybeCleanupLock
-                    continue;
-                }
+            if snapshot.get_lock(key.clone(), None, Some(self.start_ts)).is_some() {
+                // Check for locks that signal concurrent writes.
+                self.back_off_maybe_clean_up_lock(key.clone());
+                continue;
             }
 
             // Find the latest write below our start timestamp.
@@ -166,15 +191,9 @@ impl crate::Transaction for MemoryStorageTransaction {
         let commit_ts = get_timestamp();
         let mut kv_data = self.data.lock().unwrap();
 
-        if let Some(r) =
-            kv_data.get_lock(primary.0.clone(), Some(self.start_ts), Some(self.start_ts))
+        if  kv_data.get_lock(primary.0.clone(), Some(self.start_ts), Some(self.start_ts)).is_none()
         {
-            if (*r.0).1 != self.start_ts {
-                // Lock is not found
-                return false;
-            }
-        } else {
-            // Lock is not found
+            // Lock is not found.
             return false;
         }
 
@@ -195,27 +214,51 @@ impl MemoryStorageTransaction {
     // Prewrite tries to lock cell w, returning false in case of conflict.
     fn prewrite(&self, w: &Write, primary: &Write) -> bool {
         let mut kv_data = self.data.lock().unwrap();
-        let latest_write = kv_data.get_write(w.0.clone(), Some(self.start_ts), None);
 
-        if latest_write.is_some() {
-            let (k, _) = latest_write.unwrap();
-            if (*k).1 >= self.start_ts {
-                // Abort on writes after our start timestamp ...
-                return false;
-            }
+        if kv_data.get_write(w.0.clone(), Some(self.start_ts), None).is_some() {
+            // Abort on writes after our start timestamp ...
+            return false;
         }
 
-        if let Some(r) = kv_data.get_lock(w.0.clone(), None, None) {
-            if (*r.0).1 != self.start_ts {
-                // ... or locks at any timestamp.
-                return false;
-            }
+        if  kv_data.get_lock(w.0.clone(), None, None).is_some() {
+            // ... or locks at any timestamp.
+            return false;
         }
 
         kv_data.put_data(w.0.clone(), self.start_ts, w.1.clone());
         kv_data.put_lock(w.0.clone(), self.start_ts, primary.0.clone());
 
         true
+    }
+
+    fn back_off_maybe_clean_up_lock(&self, key: Vec<u8>) {
+        let mut kv_data = self.data.lock().unwrap();
+
+        if let Some(r) = kv_data.get_lock(key.clone(), None, Some(self.start_ts)) {
+            if get_timestamp() - (*r.0).1 > MAX_TIME_TO_ALIVE {
+                let primary = (*r.1).clone();
+                let ts = (*r.0).1;
+
+                if kv_data.get_lock(primary.clone(), Some(ts), Some(ts)).is_some() {
+                    let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary);
+                    
+                    for k in uncommitted_keys {
+                        kv_data.erase_data(k.0.clone(), ts);
+                        kv_data.erase_lock(k.0.clone(), ts);
+                    }
+                } else {
+                    let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary);
+                    let commit_ts = get_timestamp();
+
+                    for k in uncommitted_keys {
+                        kv_data.put_write(k.0.clone(), commit_ts, ts);
+                        kv_data.erase_lock(k.0.clone(), commit_ts);
+                    }
+                }
+            }
+        } else {
+            thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
+        }
     }
 }
 
