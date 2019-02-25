@@ -113,6 +113,16 @@ impl KvTable {
 
         keys
     }
+
+    pub fn get_commit_ts(&self, ts: u64, primary: Vec<u8>) -> Option<u64> {
+        for (map_key, v) in self.write.iter() {
+            if *v == ts && map_key.0 == primary {
+                return Some(map_key.1);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Default)]
@@ -143,7 +153,7 @@ impl crate::Store for MemoryStorage {
 #[derive(Debug)]
 struct Write(Vec<u8>, Vec<u8>);
 
-// TODO: For each transaction, we need to limit its max execution time. 
+// TODO: For each transaction, we need to limit its max execution time.
 pub struct MemoryStorageTransaction {
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
@@ -155,7 +165,10 @@ impl crate::Transaction for MemoryStorageTransaction {
         loop {
             let snapshot = self.data.lock().unwrap().clone();
 
-            if snapshot.get_lock(key.clone(), None, Some(self.start_ts)).is_some() {
+            if snapshot
+                .get_lock(key.clone(), None, Some(self.start_ts))
+                .is_some()
+            {
                 // Check for locks that signal concurrent writes.
                 self.back_off_maybe_clean_up_lock(key.clone());
                 continue;
@@ -191,7 +204,9 @@ impl crate::Transaction for MemoryStorageTransaction {
         let commit_ts = get_timestamp();
         let mut kv_data = self.data.lock().unwrap();
 
-        if  kv_data.get_lock(primary.0.clone(), Some(self.start_ts), Some(self.start_ts)).is_none()
+        if kv_data
+            .get_lock(primary.0.clone(), Some(self.start_ts), Some(self.start_ts))
+            .is_none()
         {
             // Lock is not found.
             return false;
@@ -215,12 +230,15 @@ impl MemoryStorageTransaction {
     fn prewrite(&self, w: &Write, primary: &Write) -> bool {
         let mut kv_data = self.data.lock().unwrap();
 
-        if kv_data.get_write(w.0.clone(), Some(self.start_ts), None).is_some() {
+        if kv_data
+            .get_write(w.0.clone(), Some(self.start_ts), None)
+            .is_some()
+        {
             // Abort on writes after our start timestamp ...
             return false;
         }
 
-        if  kv_data.get_lock(w.0.clone(), None, None).is_some() {
+        if kv_data.get_lock(w.0.clone(), None, None).is_some() {
             // ... or locks at any timestamp.
             return false;
         }
@@ -239,26 +257,30 @@ impl MemoryStorageTransaction {
                 let primary = (*r.1).clone();
                 let ts = (*r.0).1;
 
-                if kv_data.get_lock(primary.clone(), Some(ts), Some(ts)).is_some() {
+                if kv_data
+                    .get_lock(primary.clone(), Some(ts), Some(ts))
+                    .is_some()
+                {
                     let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary);
-                    
+
                     for k in uncommitted_keys {
                         kv_data.erase_data(k.0.clone(), ts);
                         kv_data.erase_lock(k.0.clone(), ts);
                     }
                 } else {
-                    let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary);
-                    let commit_ts = get_timestamp();
+                    let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary.clone());
+                    let commit_ts = kv_data.get_commit_ts(ts, primary).unwrap();
 
                     for k in uncommitted_keys {
                         kv_data.put_write(k.0.clone(), commit_ts, ts);
                         kv_data.erase_lock(k.0.clone(), commit_ts);
                     }
                 }
+                return;
             }
-        } else {
-            thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
         }
+
+        thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
     }
 }
 
