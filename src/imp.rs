@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{self, Duration};
 
-const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(60).as_nanos() as u64;
+const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(10).as_nanos() as u64;
 const BACKOFF_TIME_MS: u64 = 500;
 
 type Key = (Vec<u8>, u64);
@@ -213,7 +213,9 @@ impl crate::Transaction for MemoryStorageTransaction {
         }
 
         kv_data.put_write(primary.0.clone(), commit_ts, self.start_ts);
+        fail_point!("commit_primary_fail", |_| {return false});
         kv_data.erase_lock(primary.0.clone(), commit_ts);
+        fail_point!("commit_secondaries_fail", |_| {return true});
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {

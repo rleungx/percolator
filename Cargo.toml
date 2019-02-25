@@ -2,3 +2,10 @@
 name = "percolator-experiment"
 version = "0.1.0"
 edition = "2018"
+
+[dependencies]
+fail = "0.2"
+
+[features]
+default = []
+no-fail = ["fail/no_fail"]

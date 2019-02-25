@@ -3,6 +3,7 @@ use crate::TestStorageBuilder;
 use crate::Transaction;
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#predicate-many-preceders-pmp
 fn test_predicate_many_preceders_read_predicates() {
     let s = TestStorageBuilder::build();
@@ -19,6 +20,7 @@ fn test_predicate_many_preceders_read_predicates() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#predicate-many-preceders-pmp
 fn test_predicate_many_preceders_write_predicates() {
     let s = TestStorageBuilder::build();
@@ -37,6 +39,7 @@ fn test_predicate_many_preceders_write_predicates() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#lost-update-p4
 fn test_lost_update() {
     let s = TestStorageBuilder::build();
@@ -55,6 +58,7 @@ fn test_lost_update() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_read_only() {
     let s = TestStorageBuilder::build();
@@ -74,6 +78,7 @@ fn test_read_skew_read_only() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_predicate_dependencies() {
     let s = TestStorageBuilder::build();
@@ -91,6 +96,7 @@ fn test_read_skew_predicate_dependencies() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_write_predicate() {
     let s = TestStorageBuilder::build();
@@ -111,6 +117,7 @@ fn test_read_skew_write_predicate() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#write-skew-g2-item
 fn test_write_skew() {
     let s = TestStorageBuilder::build();
@@ -131,6 +138,7 @@ fn test_write_skew() {
 }
 
 #[test]
+#[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#anti-dependency-cycles-g2
 fn test_anti_dependency_cycles() {
     let s = TestStorageBuilder::build();
@@ -147,4 +155,46 @@ fn test_anti_dependency_cycles() {
     let t3 = s.begin();
     assert_eq!(t3.get(b"3".to_vec()).unwrap(), b"30");
     assert_eq!(t3.get(b"4".to_vec()).unwrap(), b"42");
+}
+
+#[test]
+#[cfg(not(feature = "no-fail"))]
+fn test_commit_primary_then_fail() {
+    fail::teardown();
+    let s = TestStorageBuilder::build();
+    let mut t1 = s.begin();
+    t1.set(b"3".to_vec(), b"30".to_vec());
+    t1.set(b"4".to_vec(), b"40".to_vec());
+    t1.set(b"5".to_vec(), b"50".to_vec());
+    t1.set(b"6".to_vec(), b"60".to_vec());
+    fail::setup();
+    fail::cfg("commit_secondaries_fail", "return()").unwrap();
+    assert!(t1.commit());
+    fail::remove("commit_secondaries_fail");
+    let t2 = s.begin();
+    assert_eq!(t2.get(b"3".to_vec()).unwrap(), b"30");
+    assert_eq!(t2.get(b"4".to_vec()).unwrap(), b"40");
+    assert_eq!(t2.get(b"5".to_vec()).unwrap(), b"50");
+    assert_eq!(t2.get(b"6".to_vec()).unwrap(), b"60");
+}
+
+#[test]
+#[cfg(not(feature = "no-fail"))]
+fn test_commit_primary_fail() {
+    fail::teardown();
+    let s = TestStorageBuilder::build();
+    let mut t1 = s.begin();
+    t1.set(b"3".to_vec(), b"30".to_vec());
+    t1.set(b"4".to_vec(), b"40".to_vec());
+    t1.set(b"5".to_vec(), b"50".to_vec());
+    t1.set(b"6".to_vec(), b"60".to_vec());
+    fail::setup();
+    fail::cfg("commit_primary_fail", "return()").unwrap();
+    assert!(!t1.commit());
+    fail::remove("commit_primary_fail");
+    let t2 = s.begin();
+    assert!(t2.get(b"3".to_vec()).is_none());
+    assert!(t2.get(b"4".to_vec()).is_none());
+    assert!(t2.get(b"5".to_vec()).is_none());
+    assert!(t2.get(b"6".to_vec()).is_none());
 }
