@@ -1,37 +1,53 @@
 #[macro_use]
 extern crate fail;
+#[macro_use]
+extern crate prost_derive;
+extern crate labcodec;
+#[macro_use]
+extern crate labrpc;
 
 mod imp;
-mod rpc;
 #[cfg(test)]
 mod tests;
 
-use jsonrpc_core::{self, Result};
-use jsonrpc_derive::rpc;
-
-use crate::rpc::Rpc;
+use std::time;
 
 pub struct StorageBuilder;
 
 impl StorageBuilder {
-    pub fn build(rpc: Rpc) -> impl Store {
-        imp::MemoryStorage::new(rpc)
+    pub fn build(client: Client) -> impl Store {
+        imp::MemoryStorage::new(client)
         // unimplemented!()
     }
 }
 
-pub struct TimeStampOracleBuilder;
-impl TimeStampOracleBuilder {
-    pub fn build() -> impl TimeStamp {
-        imp::TimeStampOracle::new()
-        // unimplemented!()
+#[derive(Clone, PartialEq, Message)]
+pub struct Timestamp {
+    #[prost(uint64, tag = "1")]
+    pub ts: u64,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct GetTimestamp {}
+
+service! {
+    service timestamp {
+        rpc get_timestamp(GetTimestamp) returns (Timestamp);
     }
 }
 
-#[rpc]
-pub trait TimeStamp {
-    #[rpc(name = "rpc_get_timestamp")]
-    fn get_timestamp(&self) -> Result<u64>;
+pub use timestamp::{add_service, Client, Service};
+
+#[derive(Clone)]
+pub struct TimestampService;
+
+impl Service for TimestampService {
+    fn get_timestamp(&self, _input: GetTimestamp) -> Timestamp {
+        let now = time::SystemTime::now();
+        Timestamp {
+            ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
+        }
+    }
 }
 
 pub trait Store {

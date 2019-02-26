@@ -5,11 +5,11 @@ edition = "2018"
 
 [dependencies]
 fail = "0.2"
-jsonrpc-test = "10.1"
-jsonrpc-derive = "10.1"
-jsonrpc-core = "10.1"
-serde = "1.0"
-serde_json = "1.0"
+prost-derive = "0.4.0"
+prost = "0.4"
+bytes = "0.4.7"
+labrpc = { git = "https://github.com/overvenus/labs6824.git" }
+labcodec = { git = "https://github.com/overvenus/labs6824.git" }
 
 [features]
 default = []

@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{self, Duration};
+use std::time::Duration;
 
-use crate::rpc::Rpc;
-
-use jsonrpc_core::Result;
+use crate::timestamp::*;
+use crate::*;
 
 const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(10).as_nanos() as u64;
 const BACKOFF_TIME_MS: u64 = 500;
@@ -129,32 +128,16 @@ impl KvTable {
     }
 }
 
-pub struct TimeStampOracle {}
-
-impl TimeStampOracle {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl crate::TimeStamp for TimeStampOracle {
-    fn get_timestamp(&self) -> Result<u64> {
-        let now = time::SystemTime::now();
-        Ok(now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64)
-    }
-}
-
-#[derive(Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
-    oracle: Arc<Mutex<Rpc>>,
+    oracle: Arc<Mutex<Client>>,
 }
 
 impl MemoryStorage {
-    pub fn new(rpc: Rpc) -> Self {
+    pub fn new(client: Client) -> Self {
         Self {
             data: Arc::new(Mutex::new(KvTable::default())),
-            oracle: Arc::new(Mutex::new(rpc)),
+            oracle: Arc::new(Mutex::new(client)),
         }
     }
 }
@@ -165,7 +148,13 @@ impl crate::Store for MemoryStorage {
     fn begin(&self) -> MemoryStorageTransaction {
         MemoryStorageTransaction {
             oracle: self.oracle.clone(),
-            start_ts: self.oracle.lock().unwrap().get_timestamp(),
+            start_ts: self
+                .oracle
+                .lock()
+                .unwrap()
+                .get_timestamp(&GetTimestamp {})
+                .unwrap()
+                .ts,
             data: self.data.clone(),
             writes: vec![],
         }
@@ -177,7 +166,7 @@ struct Write(Vec<u8>, Vec<u8>);
 
 // TODO: For each transaction, we need to limit its max execution time.
 pub struct MemoryStorageTransaction {
-    oracle: Arc<Mutex<Rpc>>,
+    oracle: Arc<Mutex<Client>>,
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
     writes: Vec<Write>,
@@ -224,7 +213,13 @@ impl crate::Transaction for MemoryStorageTransaction {
         }
 
         // Commit primary first.
-        let commit_ts = self.oracle.lock().unwrap().get_timestamp();
+        let commit_ts = self
+            .oracle
+            .lock()
+            .unwrap()
+            .get_timestamp(&GetTimestamp {})
+            .unwrap()
+            .ts;
         let mut kv_data = self.data.lock().unwrap();
 
         if kv_data
@@ -278,7 +273,16 @@ impl MemoryStorageTransaction {
         let mut kv_data = self.data.lock().unwrap();
 
         if let Some(r) = kv_data.get_lock(key.clone(), None, Some(self.start_ts)) {
-            if self.oracle.lock().unwrap().get_timestamp() - (*r.0).1 > MAX_TIME_TO_ALIVE {
+            if self
+                .oracle
+                .lock()
+                .unwrap()
+                .get_timestamp(&GetTimestamp {})
+                .unwrap()
+                .ts
+                - (*r.0).1
+                > MAX_TIME_TO_ALIVE
+            {
                 let primary = (*r.1).clone();
                 let ts = (*r.0).1;
 
