@@ -3,6 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{self, Duration};
 
+use crate::rpc::Rpc;
+
+use jsonrpc_core::Result;
+
 const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(10).as_nanos() as u64;
 const BACKOFF_TIME_MS: u64 = 500;
 
@@ -125,15 +129,32 @@ impl KvTable {
     }
 }
 
+pub struct TimeStampOracle {}
+
+impl TimeStampOracle {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl crate::TimeStamp for TimeStampOracle {
+    fn get_timestamp(&self) -> Result<u64> {
+        let now = time::SystemTime::now();
+        Ok(now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64)
+    }
+}
+
 #[derive(Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
+    oracle: Arc<Mutex<Rpc>>,
 }
 
 impl MemoryStorage {
-    pub fn new() -> Self {
+    pub fn new(rpc: Rpc) -> Self {
         Self {
             data: Arc::new(Mutex::new(KvTable::default())),
+            oracle: Arc::new(Mutex::new(rpc)),
         }
     }
 }
@@ -143,7 +164,8 @@ impl crate::Store for MemoryStorage {
 
     fn begin(&self) -> MemoryStorageTransaction {
         MemoryStorageTransaction {
-            start_ts: get_timestamp(),
+            oracle: self.oracle.clone(),
+            start_ts: self.oracle.lock().unwrap().get_timestamp(),
             data: self.data.clone(),
             writes: vec![],
         }
@@ -155,6 +177,7 @@ struct Write(Vec<u8>, Vec<u8>);
 
 // TODO: For each transaction, we need to limit its max execution time.
 pub struct MemoryStorageTransaction {
+    oracle: Arc<Mutex<Rpc>>,
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
     writes: Vec<Write>,
@@ -201,7 +224,7 @@ impl crate::Transaction for MemoryStorageTransaction {
         }
 
         // Commit primary first.
-        let commit_ts = get_timestamp();
+        let commit_ts = self.oracle.lock().unwrap().get_timestamp();
         let mut kv_data = self.data.lock().unwrap();
 
         if kv_data
@@ -213,9 +236,9 @@ impl crate::Transaction for MemoryStorageTransaction {
         }
 
         kv_data.put_write(primary.0.clone(), commit_ts, self.start_ts);
-        fail_point!("commit_primary_fail", |_| {return false});
+        fail_point!("commit_primary_fail", |_| { false });
         kv_data.erase_lock(primary.0.clone(), commit_ts);
-        fail_point!("commit_secondaries_fail", |_| {return true});
+        fail_point!("commit_secondaries_fail", |_| { true });
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {
@@ -255,7 +278,7 @@ impl MemoryStorageTransaction {
         let mut kv_data = self.data.lock().unwrap();
 
         if let Some(r) = kv_data.get_lock(key.clone(), None, Some(self.start_ts)) {
-            if get_timestamp() - (*r.0).1 > MAX_TIME_TO_ALIVE {
+            if self.oracle.lock().unwrap().get_timestamp() - (*r.0).1 > MAX_TIME_TO_ALIVE {
                 let primary = (*r.1).clone();
                 let ts = (*r.0).1;
 
@@ -284,10 +307,4 @@ impl MemoryStorageTransaction {
 
         thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
     }
-}
-
-// FIXME: Need a TSO for concurrently getting timestamps.
-pub fn get_timestamp() -> u64 {
-    let now = time::SystemTime::now();
-    now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64
 }

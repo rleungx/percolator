@@ -2,16 +2,36 @@
 extern crate fail;
 
 mod imp;
+mod rpc;
 #[cfg(test)]
 mod tests;
 
-pub struct TestStorageBuilder;
+use jsonrpc_core::{self, Result};
+use jsonrpc_derive::rpc;
 
-impl TestStorageBuilder {
-    pub fn build() -> impl Store {
-        imp::MemoryStorage::new()
+use crate::rpc::Rpc;
+
+pub struct StorageBuilder;
+
+impl StorageBuilder {
+    pub fn build(rpc: Rpc) -> impl Store {
+        imp::MemoryStorage::new(rpc)
         // unimplemented!()
     }
+}
+
+pub struct TimeStampOracleBuilder;
+impl TimeStampOracleBuilder {
+    pub fn build() -> impl TimeStamp {
+        imp::TimeStampOracle::new()
+        // unimplemented!()
+    }
+}
+
+#[rpc]
+pub trait TimeStamp {
+    #[rpc(name = "rpc_get_timestamp")]
+    fn get_timestamp(&self) -> Result<u64>;
 }
 
 pub trait Store {
