@@ -41,15 +41,6 @@ pub use timestamp::{add_service, Client, Service};
 #[derive(Clone)]
 pub struct TimestampService;
 
-impl Service for TimestampService {
-    fn get_timestamp(&self, _input: GetTimestamp) -> Timestamp {
-        let now = time::SystemTime::now();
-        Timestamp {
-            ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
-        }
-    }
-}
-
 pub trait Store {
     type Transaction: Transaction;
 

@@ -106,6 +106,7 @@ impl KvTable {
         }
     }
 
+    #[inline]
     pub fn get_uncommitted_keys(&self, ts: u64, primary: Vec<u8>) -> Vec<Key> {
         let mut keys: Vec<Key> = vec![];
         for (map_key, v) in self.lock.iter() {
@@ -117,6 +118,7 @@ impl KvTable {
         keys
     }
 
+    #[inline]
     pub fn get_commit_ts(&self, ts: u64, primary: Vec<u8>) -> Option<u64> {
         for (map_key, v) in self.write.iter() {
             if *v == ts && map_key.0 == primary {
@@ -310,5 +312,14 @@ impl MemoryStorageTransaction {
         }
 
         thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
+    }
+}
+
+impl Service for TimestampService {
+    fn get_timestamp(&self, _input: GetTimestamp) -> Timestamp {
+        let now = time::SystemTime::now();
+        Timestamp {
+            ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
+        }
     }
 }
