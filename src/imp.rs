@@ -1,25 +1,11 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::timestamp::*;
 use crate::*;
 
-const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(10).as_nanos() as u64;
+const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(1).as_nanos() as u64;
 const BACKOFF_TIME_MS: u64 = 500;
-
-type Key = (Vec<u8>, u64);
-
-#[derive(Clone, Default)]
-pub struct KvTable {
-    // column write <(Key, Timestamp), Timestamp>
-    write: BTreeMap<Key, u64>,
-    // column data <(Key, Timestamp), Value>
-    data: BTreeMap<Key, Vec<u8>>,
-    // column lock <(Key, Timestamp), Key>
-    lock: BTreeMap<Key, Vec<u8>>,
-}
 
 impl KvTable {
     #[inline]
@@ -130,25 +116,9 @@ impl KvTable {
     }
 }
 
-pub struct MemoryStorage {
-    data: Arc<Mutex<KvTable>>,
-    oracle: Arc<Mutex<Client>>,
-}
-
-impl MemoryStorage {
-    pub fn new(client: Client) -> Self {
-        Self {
-            data: Arc::new(Mutex::new(KvTable::default())),
-            oracle: Arc::new(Mutex::new(client)),
-        }
-    }
-}
-
-impl crate::Store for MemoryStorage {
-    type Transaction = MemoryStorageTransaction;
-
-    fn begin(&self) -> MemoryStorageTransaction {
-        MemoryStorageTransaction {
+impl transaction::Service for MemoryStorage {
+    fn begin(&self, req: BeginRequest) -> BeginResponse {
+        let txn = MemoryStorageTransaction {
             oracle: self.oracle.clone(),
             start_ts: self
                 .oracle
@@ -159,91 +129,100 @@ impl crate::Store for MemoryStorage {
                 .ts,
             data: self.data.clone(),
             writes: vec![],
-        }
+        };
+        self.transactions.lock().unwrap().insert(req.id, txn);
+
+        BeginResponse {}
     }
-}
 
-#[derive(Debug)]
-struct Write(Vec<u8>, Vec<u8>);
-
-// TODO: For each transaction, we need to limit its max execution time.
-pub struct MemoryStorageTransaction {
-    oracle: Arc<Mutex<Client>>,
-    start_ts: u64,
-    data: Arc<Mutex<KvTable>>,
-    writes: Vec<Write>,
-}
-
-impl crate::Transaction for MemoryStorageTransaction {
-    fn get(&self, key: Vec<u8>) -> Option<Vec<u8>> {
+    fn get(&self, req: GetRequest) -> GetResponse {
+        let txns = self.transactions.lock().unwrap();
+        let txn = txns.get(&req.id).unwrap();
         loop {
-            let snapshot = self.data.lock().unwrap().clone();
+            let key = req.key.clone();
+            let snapshot = txn.data.lock().unwrap().clone();
 
             if snapshot
-                .get_lock(key.clone(), None, Some(self.start_ts))
+                .get_lock(key.clone(), None, Some(txn.start_ts))
                 .is_some()
             {
                 // Check for locks that signal concurrent writes.
-                self.back_off_maybe_clean_up_lock(key.clone());
+                txn.back_off_maybe_clean_up_lock(key.clone());
                 continue;
             }
 
             // Find the latest write below our start timestamp.
-            let (_, data_ts) = snapshot.get_write(key.clone(), None, Some(self.start_ts))?;
-            let value = snapshot.get_data(key.clone(), *data_ts);
+            let (_, data_ts) = match snapshot.get_write(key.clone(), None, Some(txn.start_ts)) {
+                Some(res) => res,
+                None => return GetResponse { value: Vec::new() },
+            };
+            let v = match snapshot.get_data(key.clone(), *data_ts) {
+                Some(res) => res,
+                None => return GetResponse { value: Vec::new() },
+            };
 
-            return value;
+            return GetResponse { value: v };
         }
     }
 
-    fn set(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        self.writes.push(Write(key, value));
+    fn set(&self, req: SetRequest) -> SetResponse {
+        let mut txns = self.transactions.lock().unwrap();
+        let txn = txns.get_mut(&req.id).unwrap();
+        let key = req.key;
+        let value = req.value;
+        txn.writes.push(Write(key, value));
+        SetResponse {}
     }
 
-    fn commit(self) -> bool {
-        let primary = &self.writes[0];
-        let secondaries = &self.writes[1..];
+    fn commit(&self, req: CommitRequest) -> CommitResponse {
+        let txns = self.transactions.lock().unwrap();
+        let txn = txns.get(&req.id).unwrap();
+        let primary = &txn.writes[0];
 
-        if !self.prewrite(primary, primary) {
-            return false;
+        let secondaries = &txn.writes[1..];
+
+        if !txn.prewrite(primary, primary) {
+            return CommitResponse { res: false };
         }
 
         for w in secondaries {
-            if !self.prewrite(w, primary) {
-                return false;
+            if !txn.prewrite(w, primary) {
+                return CommitResponse { res: false };
             }
         }
 
         // Commit primary first.
-        let commit_ts = self
+        let commit_ts = txn
             .oracle
             .lock()
             .unwrap()
             .get_timestamp(&GetTimestamp {})
             .unwrap()
             .ts;
-        let mut kv_data = self.data.lock().unwrap();
+        let mut kv_data = txn.data.lock().unwrap();
 
         if kv_data
-            .get_lock(primary.0.clone(), Some(self.start_ts), Some(self.start_ts))
+            .get_lock(primary.0.clone(), Some(txn.start_ts), Some(txn.start_ts))
             .is_none()
         {
             // Lock is not found.
-            return false;
+            return CommitResponse { res: false };
         }
 
-        kv_data.put_write(primary.0.clone(), commit_ts, self.start_ts);
-        fail_point!("commit_primary_fail", |_| { false });
+        kv_data.put_write(primary.0.clone(), commit_ts, txn.start_ts);
+        fail_point!("commit_primary_fail", |_| { CommitResponse { res: false } });
         kv_data.erase_lock(primary.0.clone(), commit_ts);
-        fail_point!("commit_secondaries_fail", |_| { true });
+        fail_point!("commit_secondaries_fail", |_| {
+            CommitResponse { res: true }
+        });
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {
-            kv_data.put_write(w.0.clone(), commit_ts, self.start_ts);
+            kv_data.put_write(w.0.clone(), commit_ts, txn.start_ts);
             kv_data.erase_lock(w.0.clone(), commit_ts);
         }
 
-        true
+        CommitResponse { res: true }
     }
 }
 
@@ -287,7 +266,6 @@ impl MemoryStorageTransaction {
             {
                 let primary = (*r.1).clone();
                 let ts = (*r.0).1;
-
                 if kv_data
                     .get_lock(primary.clone(), Some(ts), Some(ts))
                     .is_some()

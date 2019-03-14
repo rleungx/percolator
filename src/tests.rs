@@ -1,36 +1,87 @@
-use crate::StorageBuilder;
-use crate::Store;
-use crate::TimestampService;
-use crate::Transaction;
+use crate::{MemoryStorage, TimestampService, TransactionClient};
+use crate::{add_service, add_transaction_service, Client};
+use crate::{BeginRequest, CommitRequest, GetRequest, SetRequest};
 
-use crate::{add_service, Client};
 use labrpc::*;
+
+fn add_txn_client(rn: &Network, client_name: &str, server_name: &str) -> TransactionClient {
+    let client = TransactionClient::new(rn.create_client(client_name.to_owned()));
+    rn.enable(client_name, true);
+    rn.connect(client_name, server_name);
+    client
+}
+
+fn add_tso_client(rn: &Network, client_name: &str, server_name: &str) -> Client {
+    let client = Client::new(rn.create_client(client_name.to_owned()));
+    rn.enable(client_name, true);
+    rn.connect(client_name, server_name);
+    client
+}
 
 #[test]
 #[cfg(feature = "no-fail")]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#predicate-many-preceders-pmp
 fn test_predicate_many_preceders_read_predicates() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let t1 = s.begin();
-    assert!(t1.get(b"3".to_vec()).is_none());
-    let mut t2 = s.begin();
-    t2.set(b"3".to_vec(), b"30".to_vec());
-    assert!(t2.commit());
-    assert!(t1.get(b"3".to_vec()).is_none());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"3".to_vec()
+        })
+        .unwrap()
+        .value
+        .is_empty());
+
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"3".to_vec(),
+        value: b"30".to_vec(),
+    });
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"3".to_vec()
+        })
+        .unwrap()
+        .value
+        .is_empty());
 }
 
 #[test]
@@ -38,28 +89,68 @@ fn test_predicate_many_preceders_read_predicates() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#predicate-many-preceders-pmp
 fn test_predicate_many_preceders_write_predicates() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let mut t1 = s.begin();
-    let mut t2 = s.begin();
-    t1.set(b"1".to_vec(), b"20".to_vec());
-    t1.set(b"2".to_vec(), b"30".to_vec());
-    assert_eq!(t2.get(b"2".to_vec()).unwrap(), b"20");
-    t2.set(b"2".to_vec(), b"40".to_vec());
-    assert!(t1.commit());
-    assert!(!t2.commit());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"1".to_vec(),
+        value: b"20".to_vec(),
+    });
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"2".to_vec(),
+        value: b"30".to_vec(),
+    });
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"2".to_vec(),
+        value: b"40".to_vec(),
+    });
+
+    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
+    assert!(!txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
 }
 
 #[test]
@@ -67,28 +158,76 @@ fn test_predicate_many_preceders_write_predicates() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#lost-update-p4
 fn test_lost_update() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let mut t1 = s.begin();
-    let mut t2 = s.begin();
-    assert_eq!(t1.get(b"1".to_vec()).unwrap(), b"10".to_vec());
-    assert_eq!(t2.get(b"1".to_vec()).unwrap(), b"10".to_vec());
-    t1.set(b"1".to_vec(), b"11".to_vec());
-    t2.set(b"1".to_vec(), b"11".to_vec());
-    assert!(t1.commit());
-    assert!(!t2.commit());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"1".to_vec(),
+        value: b"11".to_vec(),
+    });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"1".to_vec(),
+        value: b"11".to_vec(),
+    });
+
+    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
+    assert!(!txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
 }
 
 #[test]
@@ -96,29 +235,94 @@ fn test_lost_update() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_read_only() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let t1 = s.begin();
-    let mut t2 = s.begin();
-    assert_eq!(t1.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t2.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t2.get(b"2".to_vec()).unwrap(), b"20");
-    t2.set(b"1".to_vec(), b"12".to_vec());
-    t2.set(b"2".to_vec(), b"18".to_vec());
-    assert!(t2.commit());
-    assert_eq!(t1.get(b"2".to_vec()).unwrap(), b"20");
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"1".to_vec(),
+        value: b"12".to_vec(),
+    });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"2".to_vec(),
+        value: b"18".to_vec(),
+    });
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
 }
 
 #[test]
@@ -126,27 +330,77 @@ fn test_read_skew_read_only() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_predicate_dependencies() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let t1 = s.begin();
-    let mut t2 = s.begin();
-    assert_eq!(t1.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t1.get(b"2".to_vec()).unwrap(), b"20");
-    t2.set(b"3".to_vec(), b"30".to_vec());
-    assert!(t2.commit());
-    assert!(t1.get(b"3".to_vec()).is_none());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"3".to_vec(),
+        value: b"30".to_vec(),
+    });
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"3".to_vec(),
+        })
+        .unwrap()
+        .value
+        .is_empty());
 }
 
 #[test]
@@ -154,30 +408,89 @@ fn test_read_skew_predicate_dependencies() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#read-skew-g-single
 fn test_read_skew_write_predicate() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let mut t1 = s.begin();
-    let mut t2 = s.begin();
-    assert_eq!(t1.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t2.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t2.get(b"2".to_vec()).unwrap(), b"20");
-    t2.set(b"1".to_vec(), b"12".to_vec());
-    t2.set(b"2".to_vec(), b"18".to_vec());
-    assert!(t2.commit());
-    t1.set(b"2".to_vec(), b"30".to_vec());
-    assert!(!t1.commit());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"1".to_vec(),
+        value: b"12".to_vec(),
+    });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"2".to_vec(),
+        value: b"18".to_vec(),
+    });
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"2".to_vec(),
+        value: b"30".to_vec(),
+    });
+    assert!(!txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
 }
 
 #[test]
@@ -185,30 +498,93 @@ fn test_read_skew_write_predicate() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#write-skew-g2-item
 fn test_write_skew() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let mut t1 = s.begin();
-    let mut t2 = s.begin();
-    assert_eq!(t1.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t1.get(b"2".to_vec()).unwrap(), b"20");
-    assert_eq!(t2.get(b"1".to_vec()).unwrap(), b"10");
-    assert_eq!(t2.get(b"2".to_vec()).unwrap(), b"20");
-    t1.set(b"1".to_vec(), b"11".to_vec());
-    t2.set(b"2".to_vec(), b"21".to_vec());
-    assert!(t1.commit());
-    assert!(t2.commit());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client3
+            .get(&GetRequest {
+                id: 3,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"1".to_vec(),
+        value: b"11".to_vec(),
+    });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"2".to_vec(),
+        value: b"21".to_vec(),
+    });
+    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
 }
 
 #[test]
@@ -216,29 +592,76 @@ fn test_write_skew() {
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#anti-dependency-cycles-g2
 fn test_anti_dependency_cycles() {
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t = s.begin();
-    t.set(b"1".to_vec(), b"10".to_vec());
-    t.set(b"2".to_vec(), b"20".to_vec());
-    assert!(t.commit());
-    let mut t1 = s.begin();
-    let mut t2 = s.begin();
-    t1.set(b"3".to_vec(), b"30".to_vec());
-    t2.set(b"4".to_vec(), b"42".to_vec());
-    assert!(t1.commit());
-    assert!(t2.commit());
-    let t3 = s.begin();
-    assert_eq!(t3.get(b"3".to_vec()).unwrap(), b"30");
-    assert_eq!(t3.get(b"4".to_vec()).unwrap(), b"42");
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let client_name = "txn3";
+    let txn_client3 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+
+    let _ = txn_client2.set(&SetRequest {
+        id: 2,
+        key: b"3".to_vec(),
+        value: b"30".to_vec(),
+    });
+    let _ = txn_client3.set(&SetRequest {
+        id: 3,
+        key: b"4".to_vec(),
+        value: b"42".to_vec(),
+    });
+    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
+    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let client_name = "txn4";
+    let txn_client4 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client4.begin(&BeginRequest { id: 4 });
+    assert_eq!(
+        txn_client4
+            .get(&GetRequest {
+                id: 4,
+                key: b"3".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"30".to_vec()
+    );
+    assert_eq!(
+        txn_client4
+            .get(&GetRequest {
+                id: 4,
+                key: b"4".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"42".to_vec()
+    );
 }
 
 #[test]
@@ -246,30 +669,90 @@ fn test_anti_dependency_cycles() {
 fn test_commit_primary_then_fail() {
     fail::teardown();
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t1 = s.begin();
-    t1.set(b"3".to_vec(), b"30".to_vec());
-    t1.set(b"4".to_vec(), b"40".to_vec());
-    t1.set(b"5".to_vec(), b"50".to_vec());
-    t1.set(b"6".to_vec(), b"60".to_vec());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"3".to_vec(),
+        value: b"30".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"4".to_vec(),
+        value: b"40".to_vec(),
+    });
     fail::setup();
     fail::cfg("commit_secondaries_fail", "return()").unwrap();
-    assert!(t1.commit());
+    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
     fail::remove("commit_secondaries_fail");
-    let t2 = s.begin();
-    assert_eq!(t2.get(b"3".to_vec()).unwrap(), b"30");
-    assert_eq!(t2.get(b"4".to_vec()).unwrap(), b"40");
-    assert_eq!(t2.get(b"5".to_vec()).unwrap(), b"50");
-    assert_eq!(t2.get(b"6".to_vec()).unwrap(), b"60");
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"1".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"10".to_vec()
+    );
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"2".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"20".to_vec()
+    );
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"3".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"30".to_vec()
+    );
+    assert_eq!(
+        txn_client2
+            .get(&GetRequest {
+                id: 2,
+                key: b"4".to_vec(),
+            })
+            .unwrap()
+            .value,
+        b"40".to_vec()
+    );
 }
 
 #[test]
@@ -277,28 +760,80 @@ fn test_commit_primary_then_fail() {
 fn test_commit_primary_fail() {
     fail::teardown();
     let rn = Network::new();
-    let server_name = "tso_server";
-    let mut builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut builder).unwrap();
-    let server = builder.build();
-    rn.add_server(server.clone());
+    let tso_server_name = "tso_server";
+    let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
+    let server_name = "server";
+    let mut server_builder = ServerBuilder::new(server_name.to_owned());
+    add_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
-    let client = Client::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    let s = StorageBuilder::build(client);
-    let mut t1 = s.begin();
-    t1.set(b"3".to_vec(), b"30".to_vec());
-    t1.set(b"4".to_vec(), b"40".to_vec());
-    t1.set(b"5".to_vec(), b"50".to_vec());
-    t1.set(b"6".to_vec(), b"60".to_vec());
+    let client = add_tso_client(&rn, client_name, tso_server_name);
+    let store = MemoryStorage::new(client);
+    add_transaction_service(store, &mut server_builder).unwrap();
+    let tso_server = tso_server_builder.build();
+    let server = server_builder.build();
+    rn.add_server(tso_server.clone());
+    rn.add_server(server.clone());
+
+    let client_name = "txn1";
+    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"1".to_vec(),
+        value: b"10".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"2".to_vec(),
+        value: b"20".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"3".to_vec(),
+        value: b"30".to_vec(),
+    });
+    let _ = txn_client1.set(&SetRequest {
+        id: 1,
+        key: b"4".to_vec(),
+        value: b"40".to_vec(),
+    });
     fail::setup();
     fail::cfg("commit_primary_fail", "return()").unwrap();
-    assert!(!t1.commit());
+    assert!(!txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
     fail::remove("commit_primary_fail");
-    let t2 = s.begin();
-    assert!(t2.get(b"3".to_vec()).is_none());
-    assert!(t2.get(b"4".to_vec()).is_none());
-    assert!(t2.get(b"5".to_vec()).is_none());
-    assert!(t2.get(b"6".to_vec()).is_none());
+    let client_name = "txn2";
+    let txn_client2 = add_txn_client(&rn, client_name, server_name);
+    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"1".to_vec(),
+        })
+        .unwrap()
+        .value
+        .is_empty());
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"2".to_vec(),
+        })
+        .unwrap()
+        .value
+        .is_empty());
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"3".to_vec(),
+        })
+        .unwrap()
+        .value
+        .is_empty());
+    assert!(txn_client2
+        .get(&GetRequest {
+            id: 2,
+            key: b"4".to_vec(),
+        })
+        .unwrap()
+        .value
+        .is_empty());
 }
