@@ -4,6 +4,9 @@ use std::time::Duration;
 use crate::service::*;
 use crate::*;
 
+use futures::Future;
+use labrpc::RpcFuture;
+
 const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(1).as_nanos() as u64;
 const BACKOFF_TIME_MS: u64 = 500;
 
@@ -104,7 +107,7 @@ impl KvTable {
 }
 
 impl transaction::Service for MemoryStorage {
-    fn begin(&self, req: BeginRequest) -> BeginResponse {
+    fn begin(&self, req: BeginRequest) -> RpcFuture<BeginResponse> {
         let txn = MemoryStorageTransaction {
             oracle: self.oracle.clone(),
             start_ts: self
@@ -112,6 +115,7 @@ impl transaction::Service for MemoryStorage {
                 .lock()
                 .unwrap()
                 .get_timestamp(&GetTimestamp {})
+                .wait()
                 .unwrap()
                 .ts,
             data: self.data.clone(),
@@ -119,10 +123,10 @@ impl transaction::Service for MemoryStorage {
         };
         self.transactions.lock().unwrap().insert(req.id, txn);
 
-        BeginResponse {}
+        Box::new(futures::future::result(Ok(BeginResponse {})))
     }
 
-    fn get(&self, req: GetRequest) -> GetResponse {
+    fn get(&self, req: GetRequest) -> RpcFuture<GetResponse> {
         let txns = self.transactions.lock().unwrap();
         let txn = txns.get(&req.id).unwrap();
         loop {
@@ -141,27 +145,35 @@ impl transaction::Service for MemoryStorage {
             // Find the latest write below our start timestamp.
             let data_ts = match snapshot.read(key.clone(), CF::Write, None, Some(txn.start_ts)) {
                 Some(res) => (*(res.1)).clone().unwrap_ts(),
-                None => return GetResponse { value: Vec::new() },
+                None => {
+                    return Box::new(futures::future::result(Ok(GetResponse {
+                        value: Vec::new(),
+                    })))
+                }
             };
             let v = match snapshot.read(key.clone(), CF::Data, Some(data_ts), Some(data_ts)) {
                 Some(res) => (*(res.1)).clone().unwrap_vec(),
-                None => return GetResponse { value: Vec::new() },
+                None => {
+                    return Box::new(futures::future::result(Ok(GetResponse {
+                        value: Vec::new(),
+                    })))
+                }
             };
 
-            return GetResponse { value: v };
+            return Box::new(futures::future::result(Ok(GetResponse { value: v })));
         }
     }
 
-    fn set(&self, req: SetRequest) -> SetResponse {
+    fn set(&self, req: SetRequest) -> RpcFuture<SetResponse> {
         let mut txns = self.transactions.lock().unwrap();
         let txn = txns.get_mut(&req.id).unwrap();
         let key = req.key;
         let value = req.value;
         txn.writes.push(Write(key, value));
-        SetResponse {}
+        Box::new(futures::future::result(Ok(SetResponse {})))
     }
 
-    fn commit(&self, req: CommitRequest) -> CommitResponse {
+    fn commit(&self, req: CommitRequest) -> RpcFuture<CommitResponse> {
         let txns = self.transactions.lock().unwrap();
         let txn = txns.get(&req.id).unwrap();
         let primary = &txn.writes[0];
@@ -169,12 +181,12 @@ impl transaction::Service for MemoryStorage {
         let secondaries = &txn.writes[1..];
 
         if !txn.prewrite(primary, primary) {
-            return CommitResponse { res: false };
+            return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
         }
 
         for w in secondaries {
             if !txn.prewrite(w, primary) {
-                return CommitResponse { res: false };
+                return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
             }
         }
 
@@ -184,6 +196,7 @@ impl transaction::Service for MemoryStorage {
             .lock()
             .unwrap()
             .get_timestamp(&GetTimestamp {})
+            .wait()
             .unwrap()
             .ts;
         let mut kv_data = txn.data.lock().unwrap();
@@ -198,7 +211,7 @@ impl transaction::Service for MemoryStorage {
             .is_none()
         {
             // Lock is not found.
-            return CommitResponse { res: false };
+            return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
         }
 
         kv_data.write(
@@ -207,10 +220,12 @@ impl transaction::Service for MemoryStorage {
             commit_ts,
             Value::Timestamp(txn.start_ts),
         );
-        fail_point!("commit_primary_fail", |_| { CommitResponse { res: false } });
+        fail_point!("commit_primary_fail", |_| {
+            Box::new(futures::future::result(Ok(CommitResponse { res: false })))
+        });
         kv_data.erase(primary.0.clone(), CF::Lock, commit_ts);
         fail_point!("commit_secondaries_fail", |_| {
-            CommitResponse { res: true }
+            Box::new(futures::future::result(Ok(CommitResponse { res: true })))
         });
 
         // Second phase: write out write records for secondary cells.
@@ -224,7 +239,7 @@ impl transaction::Service for MemoryStorage {
             kv_data.erase(w.0.clone(), CF::Lock, commit_ts);
         }
 
-        CommitResponse { res: true }
+        Box::new(futures::future::result(Ok(CommitResponse { res: true })))
     }
 }
 
@@ -266,16 +281,14 @@ impl MemoryStorageTransaction {
         let mut kv_data = self.data.lock().unwrap();
 
         if let Some(r) = kv_data.read(key.clone(), CF::Lock, None, Some(self.start_ts)) {
-            if self
+            let response = self
                 .oracle
                 .lock()
                 .unwrap()
                 .get_timestamp(&GetTimestamp {})
-                .unwrap()
-                .ts
-                - (*r.0).1
-                > MAX_TIME_TO_ALIVE
-            {
+                .wait()
+                .unwrap();
+            if response.ts - (*r.0).1 > MAX_TIME_TO_ALIVE {
                 let primary = (*r.1).clone().unwrap_vec().clone();
                 let ts = (*r.0).1;
                 if kv_data
@@ -306,11 +319,12 @@ impl MemoryStorageTransaction {
 }
 
 impl Service for TimestampService {
-    fn get_timestamp(&self, _input: GetTimestamp) -> Timestamp {
+    fn get_timestamp(&self, _input: GetTimestamp) -> RpcFuture<Timestamp> {
         let now = time::SystemTime::now();
-        Timestamp {
+        let ts = Timestamp {
             ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
-        }
+        };
+        Box::new(futures::future::result(Ok(ts)))
     }
 }
 

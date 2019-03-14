@@ -4,6 +4,7 @@ use crate::service::{
 use crate::service::{BeginRequest, CommitRequest, GetRequest, SetRequest};
 use crate::MemoryStorage;
 
+use futures::Future;
 use labrpc::*;
 
 fn add_txn_client(rn: &Network, client_name: &str, server_name: &str) -> TransactionClient {
@@ -42,45 +43,65 @@ fn test_predicate_many_preceders_read_predicates() {
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
 
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     assert!(txn_client2
         .get(&GetRequest {
             id: 2,
             key: b"3".to_vec()
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
 
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"3".to_vec(),
-        value: b"30".to_vec(),
-    });
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"3".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
     assert!(txn_client2
         .get(&GetRequest {
             id: 2,
             key: b"3".to_vec()
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
@@ -107,52 +128,81 @@ fn test_predicate_many_preceders_write_predicates() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"1".to_vec(),
-        value: b"20".to_vec(),
-    });
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"2".to_vec(),
-        value: b"30".to_vec(),
-    });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"1".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"2".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
     assert_eq!(
         txn_client2
             .get(&GetRequest {
                 id: 2,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
     );
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"2".to_vec(),
-        value: b"40".to_vec(),
-    });
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"2".to_vec(),
+            value: b"40".to_vec(),
+        })
+        .wait();
 
-    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
-    assert!(!txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    assert!(
+        txn_client2
+            .commit(&CommitRequest { id: 2 })
+            .wait()
+            .unwrap()
+            .res
+    );
+    assert!(
+        !txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 }
 
 #[test]
@@ -176,26 +226,36 @@ fn test_lost_update() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
 
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
 
     assert_eq!(
         txn_client2
@@ -203,6 +263,7 @@ fn test_lost_update() {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -213,23 +274,40 @@ fn test_lost_update() {
                 id: 3,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
     );
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"1".to_vec(),
-        value: b"11".to_vec(),
-    });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"1".to_vec(),
-        value: b"11".to_vec(),
-    });
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"1".to_vec(),
+            value: b"11".to_vec(),
+        })
+        .wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"1".to_vec(),
+            value: b"11".to_vec(),
+        })
+        .wait();
 
-    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
-    assert!(!txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    assert!(
+        txn_client2
+            .commit(&CommitRequest { id: 2 })
+            .wait()
+            .unwrap()
+            .res
+    );
+    assert!(
+        !txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 }
 
 #[test]
@@ -253,32 +331,43 @@ fn test_read_skew_read_only() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
 
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
     assert_eq!(
         txn_client2
             .get(&GetRequest {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -289,6 +378,7 @@ fn test_read_skew_read_only() {
                 id: 3,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -299,21 +389,32 @@ fn test_read_skew_read_only() {
                 id: 3,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
     );
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"1".to_vec(),
-        value: b"12".to_vec(),
-    });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"2".to_vec(),
-        value: b"18".to_vec(),
-    });
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"1".to_vec(),
+            value: b"12".to_vec(),
+        })
+        .wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"2".to_vec(),
+            value: b"18".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
     assert_eq!(
         txn_client2
@@ -321,6 +422,7 @@ fn test_read_skew_read_only() {
                 id: 2,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
@@ -348,24 +450,34 @@ fn test_read_skew_predicate_dependencies() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
 
     assert_eq!(
         txn_client2
@@ -373,6 +485,7 @@ fn test_read_skew_predicate_dependencies() {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -383,23 +496,33 @@ fn test_read_skew_predicate_dependencies() {
                 id: 2,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
     );
 
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"3".to_vec(),
-        value: b"30".to_vec(),
-    });
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"3".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
     assert!(txn_client2
         .get(&GetRequest {
             id: 2,
             key: b"3".to_vec(),
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
@@ -426,24 +549,34 @@ fn test_read_skew_write_predicate() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
 
     assert_eq!(
         txn_client2
@@ -451,6 +584,7 @@ fn test_read_skew_write_predicate() {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -461,6 +595,7 @@ fn test_read_skew_write_predicate() {
                 id: 3,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -471,28 +606,47 @@ fn test_read_skew_write_predicate() {
                 id: 3,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
     );
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"1".to_vec(),
-        value: b"12".to_vec(),
-    });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"2".to_vec(),
-        value: b"18".to_vec(),
-    });
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"1".to_vec(),
+            value: b"12".to_vec(),
+        })
+        .wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"2".to_vec(),
+            value: b"18".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"2".to_vec(),
-        value: b"30".to_vec(),
-    });
-    assert!(!txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"2".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    assert!(
+        !txn_client2
+            .commit(&CommitRequest { id: 2 })
+            .wait()
+            .unwrap()
+            .res
+    );
 }
 
 #[test]
@@ -516,24 +670,34 @@ fn test_write_skew() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
 
     assert_eq!(
         txn_client2
@@ -541,6 +705,7 @@ fn test_write_skew() {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -551,6 +716,7 @@ fn test_write_skew() {
                 id: 2,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
@@ -561,6 +727,7 @@ fn test_write_skew() {
                 id: 3,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -571,22 +738,39 @@ fn test_write_skew() {
                 id: 3,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
     );
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"1".to_vec(),
-        value: b"11".to_vec(),
-    });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"2".to_vec(),
-        value: b"21".to_vec(),
-    });
-    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"1".to_vec(),
+            value: b"11".to_vec(),
+        })
+        .wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"2".to_vec(),
+            value: b"21".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client2
+            .commit(&CommitRequest { id: 2 })
+            .wait()
+            .unwrap()
+            .res
+    );
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
 }
 
 #[test]
@@ -610,46 +794,73 @@ fn test_anti_dependency_cycles() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     let client_name = "txn3";
     let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 });
+    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
 
-    let _ = txn_client2.set(&SetRequest {
-        id: 2,
-        key: b"3".to_vec(),
-        value: b"30".to_vec(),
-    });
-    let _ = txn_client3.set(&SetRequest {
-        id: 3,
-        key: b"4".to_vec(),
-        value: b"42".to_vec(),
-    });
-    assert!(txn_client2.commit(&CommitRequest { id: 2 }).unwrap().res);
-    assert!(txn_client3.commit(&CommitRequest { id: 3 }).unwrap().res);
+    let _ = txn_client2
+        .set(&SetRequest {
+            id: 2,
+            key: b"3".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    let _ = txn_client3
+        .set(&SetRequest {
+            id: 3,
+            key: b"4".to_vec(),
+            value: b"42".to_vec(),
+        })
+        .wait();
+    assert!(
+        txn_client2
+            .commit(&CommitRequest { id: 2 })
+            .wait()
+            .unwrap()
+            .res
+    );
+    assert!(
+        txn_client3
+            .commit(&CommitRequest { id: 3 })
+            .wait()
+            .unwrap()
+            .res
+    );
     let client_name = "txn4";
     let txn_client4 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client4.begin(&BeginRequest { id: 4 });
+    let _ = txn_client4.begin(&BeginRequest { id: 4 }).wait();
     assert_eq!(
         txn_client4
             .get(&GetRequest {
                 id: 4,
                 key: b"3".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"30".to_vec()
@@ -660,6 +871,7 @@ fn test_anti_dependency_cycles() {
                 id: 4,
                 key: b"4".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"42".to_vec()
@@ -687,40 +899,55 @@ fn test_commit_primary_then_fail() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"3".to_vec(),
-        value: b"30".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"4".to_vec(),
-        value: b"40".to_vec(),
-    });
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"3".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"4".to_vec(),
+            value: b"40".to_vec(),
+        })
+        .wait();
     fail::setup();
     fail::cfg("commit_secondaries_fail", "return()").unwrap();
-    assert!(txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    assert!(
+        txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     fail::remove("commit_secondaries_fail");
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     assert_eq!(
         txn_client2
             .get(&GetRequest {
                 id: 2,
                 key: b"1".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"10".to_vec()
@@ -731,6 +958,7 @@ fn test_commit_primary_then_fail() {
                 id: 2,
                 key: b"2".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"20".to_vec()
@@ -741,6 +969,7 @@ fn test_commit_primary_then_fail() {
                 id: 2,
                 key: b"3".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"30".to_vec()
@@ -751,6 +980,7 @@ fn test_commit_primary_then_fail() {
                 id: 2,
                 key: b"4".to_vec(),
             })
+            .wait()
             .unwrap()
             .value,
         b"40".to_vec()
@@ -778,39 +1008,54 @@ fn test_commit_primary_fail() {
 
     let client_name = "txn1";
     let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"1".to_vec(),
-        value: b"10".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"2".to_vec(),
-        value: b"20".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"3".to_vec(),
-        value: b"30".to_vec(),
-    });
-    let _ = txn_client1.set(&SetRequest {
-        id: 1,
-        key: b"4".to_vec(),
-        value: b"40".to_vec(),
-    });
+    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"1".to_vec(),
+            value: b"10".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"2".to_vec(),
+            value: b"20".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"3".to_vec(),
+            value: b"30".to_vec(),
+        })
+        .wait();
+    let _ = txn_client1
+        .set(&SetRequest {
+            id: 1,
+            key: b"4".to_vec(),
+            value: b"40".to_vec(),
+        })
+        .wait();
     fail::setup();
     fail::cfg("commit_primary_fail", "return()").unwrap();
-    assert!(!txn_client1.commit(&CommitRequest { id: 1 }).unwrap().res);
+    assert!(
+        !txn_client1
+            .commit(&CommitRequest { id: 1 })
+            .wait()
+            .unwrap()
+            .res
+    );
     fail::remove("commit_primary_fail");
     let client_name = "txn2";
     let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 });
+    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
     assert!(txn_client2
         .get(&GetRequest {
             id: 2,
             key: b"1".to_vec(),
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
@@ -819,6 +1064,7 @@ fn test_commit_primary_fail() {
             id: 2,
             key: b"2".to_vec(),
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
@@ -827,6 +1073,7 @@ fn test_commit_primary_fail() {
             id: 2,
             key: b"3".to_vec(),
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());
@@ -835,6 +1082,7 @@ fn test_commit_primary_fail() {
             id: 2,
             key: b"4".to_vec(),
         })
+        .wait()
         .unwrap()
         .value
         .is_empty());

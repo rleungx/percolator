@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 fail = "0.2"
+futures = "0.1"
 prost-derive = "0.4.0"
 prost = "0.4"
 bytes = "0.4.7"
