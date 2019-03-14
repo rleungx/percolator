@@ -17,14 +17,26 @@ use std::time;
 
 type Key = (Vec<u8>, u64);
 
+pub enum CF {
+    Write,
+    Data,
+    Lock,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum Value {
+    Timestamp(u64),
+    Vector(Vec<u8>),
+}
+
 #[derive(Clone, Default)]
 pub struct KvTable {
-    // column write <(Key, Timestamp), Timestamp>
-    write: BTreeMap<Key, u64>,
-    // column data <(Key, Timestamp), Value>
-    data: BTreeMap<Key, Vec<u8>>,
-    // column lock <(Key, Timestamp), Key>
-    lock: BTreeMap<Key, Vec<u8>>,
+    // column write <(Vector, Timestamp), Timestamp>
+    write: BTreeMap<Key, Value>,
+    // column data <(Vector, Timestamp), Vector>
+    data: BTreeMap<Key, Value>,
+    // column lock <(Vector, Timestamp), Vector>
+    lock: BTreeMap<Key, Value>,
 }
 
 #[derive(Debug, Clone)]

@@ -9,12 +9,13 @@ const BACKOFF_TIME_MS: u64 = 500;
 
 impl KvTable {
     #[inline]
-    pub fn get_write(
+    fn read(
         &self,
         key: Vec<u8>,
+        cf: CF,
         ts_start_inclusive: Option<u64>,
         ts_end_inclusive: Option<u64>,
-    ) -> Option<(&Key, &u64)> {
+    ) -> Option<(&Key, &Value)> {
         let range_start = match ts_start_inclusive {
             None => (key.clone(), 0),
             Some(ts) => (key.clone(), ts),
@@ -23,72 +24,58 @@ impl KvTable {
             None => (key.clone(), std::u64::MAX),
             Some(ts) => (key.clone(), ts),
         };
-        let mut r = self.write.range(range_start..=range_end);
-        r.next_back()
-    }
-
-    #[inline]
-    pub fn get_data(&self, key: Vec<u8>, start_ts: u64) -> Option<Vec<u8>> {
-        let map_key = (key, start_ts);
-        self.data.get(&map_key).map(|v| v.to_vec())
-    }
-
-    #[inline]
-    pub fn get_lock(
-        &self,
-        key: Vec<u8>,
-        ts_start_inclusive: Option<u64>,
-        ts_end_inclusive: Option<u64>,
-    ) -> Option<(&Key, &Vec<u8>)> {
-        let range_start = match ts_start_inclusive {
-            None => (key.clone(), 0),
-            Some(ts) => (key.clone(), ts),
-        };
-        let range_end = match ts_end_inclusive {
-            None => (key.clone(), std::u64::MAX),
-            Some(ts) => (key.clone(), ts),
-        };
-        let mut r = self.lock.range(range_start..=range_end);
-        r.next_back()
-    }
-
-    #[inline]
-    pub fn put_write(&mut self, key: Vec<u8>, commit_ts: u64, start_ts: u64) {
-        let map_key = (key, commit_ts);
-        let _ = self.write.insert(map_key, start_ts);
-    }
-
-    #[inline]
-    pub fn put_data(&mut self, key: Vec<u8>, start_ts: u64, value: Vec<u8>) {
-        let map_key = (key, start_ts);
-        let _ = self.data.insert(map_key, value);
-    }
-
-    #[inline]
-    pub fn put_lock(&mut self, key: Vec<u8>, start_ts: u64, value: Vec<u8>) {
-        let map_key = (key, start_ts);
-        let _ = self.lock.insert(map_key, value);
-    }
-
-    #[inline]
-    pub fn erase_data(&mut self, key: Vec<u8>, commit_ts: u64) {
-        let l = self.data.clone();
-
-        for (map_key, _) in l.iter() {
-            if key.as_slice() == map_key.0.as_slice() && map_key.1 <= commit_ts {
-                let _ = self.data.remove(&map_key);
+        match cf {
+            CF::Write => {
+                let mut r = self.write.range(range_start..=range_end);
+                r.next_back()
+            }
+            CF::Data => {
+                let mut r = self.data.range(range_start..=range_end);
+                r.next_back()
+            }
+            CF::Lock => {
+                let mut r = self.lock.range(range_start..=range_end);
+                r.next_back()
             }
         }
     }
 
     #[inline]
-    pub fn erase_lock(&mut self, key: Vec<u8>, commit_ts: u64) {
-        let l = self.lock.clone();
-
-        for (map_key, _) in l.iter() {
-            if key.as_slice() == map_key.0.as_slice() && map_key.1 <= commit_ts {
-                let _ = self.lock.remove(&map_key);
+    fn write(&mut self, key: Vec<u8>, cf: CF, ts: u64, value: Value) {
+        let map_key = (key, ts);
+        match cf {
+            CF::Write => {
+                let _ = self.write.insert(map_key, value);
             }
+            CF::Data => {
+                let _ = self.data.insert(map_key, value);
+            }
+            CF::Lock => {
+                let _ = self.lock.insert(map_key, value);
+            }
+        }
+    }
+
+    #[inline]
+    fn erase(&mut self, key: Vec<u8>, cf: CF, commit_ts: u64) {
+        match cf {
+            CF::Data => {
+                let l = self.data.clone();
+                for (map_key, _) in l.iter() {
+                    if key.as_slice() == map_key.0.as_slice() && map_key.1 <= commit_ts {
+                        let _ = self.data.remove(&map_key);
+                    }
+                }
+            }
+            CF::Lock => {
+                let l = self.lock.clone();
+                for (map_key, _) in l.iter() {
+                    if key.as_slice() == map_key.0.as_slice() && map_key.1 <= commit_ts {
+                        let _ = self.lock.remove(&map_key);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -96,7 +83,7 @@ impl KvTable {
     pub fn get_uncommitted_keys(&self, ts: u64, primary: Vec<u8>) -> Vec<Key> {
         let mut keys: Vec<Key> = vec![];
         for (map_key, v) in self.lock.iter() {
-            if *v == primary && map_key.1 == ts {
+            if (*v).clone().unwrap_vec() == primary && map_key.1 == ts {
                 keys.push((*map_key).clone());
             }
         }
@@ -107,7 +94,7 @@ impl KvTable {
     #[inline]
     pub fn get_commit_ts(&self, ts: u64, primary: Vec<u8>) -> Option<u64> {
         for (map_key, v) in self.write.iter() {
-            if *v == ts && map_key.0 == primary {
+            if (*v).clone().unwrap_ts() == ts && map_key.0 == primary {
                 return Some(map_key.1);
             }
         }
@@ -143,7 +130,7 @@ impl transaction::Service for MemoryStorage {
             let snapshot = txn.data.lock().unwrap().clone();
 
             if snapshot
-                .get_lock(key.clone(), None, Some(txn.start_ts))
+                .read(key.clone(), CF::Lock, None, Some(txn.start_ts))
                 .is_some()
             {
                 // Check for locks that signal concurrent writes.
@@ -152,12 +139,12 @@ impl transaction::Service for MemoryStorage {
             }
 
             // Find the latest write below our start timestamp.
-            let (_, data_ts) = match snapshot.get_write(key.clone(), None, Some(txn.start_ts)) {
-                Some(res) => res,
+            let data_ts = match snapshot.read(key.clone(), CF::Write, None, Some(txn.start_ts)) {
+                Some(res) => (*(res.1)).clone().unwrap_ts(),
                 None => return GetResponse { value: Vec::new() },
             };
-            let v = match snapshot.get_data(key.clone(), *data_ts) {
-                Some(res) => res,
+            let v = match snapshot.read(key.clone(), CF::Data, Some(data_ts), Some(data_ts)) {
+                Some(res) => (*(res.1)).clone().unwrap_vec(),
                 None => return GetResponse { value: Vec::new() },
             };
 
@@ -202,24 +189,39 @@ impl transaction::Service for MemoryStorage {
         let mut kv_data = txn.data.lock().unwrap();
 
         if kv_data
-            .get_lock(primary.0.clone(), Some(txn.start_ts), Some(txn.start_ts))
+            .read(
+                primary.0.clone(),
+                CF::Lock,
+                Some(txn.start_ts),
+                Some(txn.start_ts),
+            )
             .is_none()
         {
             // Lock is not found.
             return CommitResponse { res: false };
         }
 
-        kv_data.put_write(primary.0.clone(), commit_ts, txn.start_ts);
+        kv_data.write(
+            primary.0.clone(),
+            CF::Write,
+            commit_ts,
+            Value::Timestamp(txn.start_ts),
+        );
         fail_point!("commit_primary_fail", |_| { CommitResponse { res: false } });
-        kv_data.erase_lock(primary.0.clone(), commit_ts);
+        kv_data.erase(primary.0.clone(), CF::Lock, commit_ts);
         fail_point!("commit_secondaries_fail", |_| {
             CommitResponse { res: true }
         });
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {
-            kv_data.put_write(w.0.clone(), commit_ts, txn.start_ts);
-            kv_data.erase_lock(w.0.clone(), commit_ts);
+            kv_data.write(
+                w.0.clone(),
+                CF::Write,
+                commit_ts,
+                Value::Timestamp(txn.start_ts),
+            );
+            kv_data.erase(w.0.clone(), CF::Lock, commit_ts);
         }
 
         CommitResponse { res: true }
@@ -232,20 +234,30 @@ impl MemoryStorageTransaction {
         let mut kv_data = self.data.lock().unwrap();
 
         if kv_data
-            .get_write(w.0.clone(), Some(self.start_ts), None)
+            .read(w.0.clone(), CF::Write, Some(self.start_ts), None)
             .is_some()
         {
             // Abort on writes after our start timestamp ...
             return false;
         }
 
-        if kv_data.get_lock(w.0.clone(), None, None).is_some() {
+        if kv_data.read(w.0.clone(), CF::Lock, None, None).is_some() {
             // ... or locks at any timestamp.
             return false;
         }
 
-        kv_data.put_data(w.0.clone(), self.start_ts, w.1.clone());
-        kv_data.put_lock(w.0.clone(), self.start_ts, primary.0.clone());
+        kv_data.write(
+            w.0.clone(),
+            CF::Data,
+            self.start_ts,
+            Value::Vector(w.1.clone()),
+        );
+        kv_data.write(
+            w.0.clone(),
+            CF::Lock,
+            self.start_ts,
+            Value::Vector(primary.0.clone()),
+        );
 
         true
     }
@@ -253,7 +265,7 @@ impl MemoryStorageTransaction {
     fn back_off_maybe_clean_up_lock(&self, key: Vec<u8>) {
         let mut kv_data = self.data.lock().unwrap();
 
-        if let Some(r) = kv_data.get_lock(key.clone(), None, Some(self.start_ts)) {
+        if let Some(r) = kv_data.read(key.clone(), CF::Lock, None, Some(self.start_ts)) {
             if self
                 .oracle
                 .lock()
@@ -264,25 +276,25 @@ impl MemoryStorageTransaction {
                 - (*r.0).1
                 > MAX_TIME_TO_ALIVE
             {
-                let primary = (*r.1).clone();
+                let primary = (*r.1).clone().unwrap_vec().clone();
                 let ts = (*r.0).1;
                 if kv_data
-                    .get_lock(primary.clone(), Some(ts), Some(ts))
+                    .read(primary.clone(), CF::Lock, Some(ts), Some(ts))
                     .is_some()
                 {
                     let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary);
 
                     for k in uncommitted_keys {
-                        kv_data.erase_data(k.0.clone(), ts);
-                        kv_data.erase_lock(k.0.clone(), ts);
+                        kv_data.erase(k.0.clone(), CF::Data, ts);
+                        kv_data.erase(k.0.clone(), CF::Lock, ts);
                     }
                 } else {
                     let uncommitted_keys = kv_data.get_uncommitted_keys(ts, primary.clone());
                     let commit_ts = kv_data.get_commit_ts(ts, primary).unwrap();
 
                     for k in uncommitted_keys {
-                        kv_data.put_write(k.0.clone(), commit_ts, ts);
-                        kv_data.erase_lock(k.0.clone(), commit_ts);
+                        kv_data.write(k.0.clone(), CF::Write, commit_ts, Value::Timestamp(ts));
+                        kv_data.erase(k.0.clone(), CF::Lock, commit_ts);
                     }
                 }
                 return;
@@ -299,5 +311,27 @@ impl Service for TimestampService {
         Timestamp {
             ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
         }
+    }
+}
+
+impl Value {
+    fn unwrap_ts(self) -> u64 {
+        let ts = match self {
+            Value::Timestamp(ts) => ts,
+            _ => {
+                panic!("something wrong!");
+            }
+        };
+        ts
+    }
+
+    fn unwrap_vec(self) -> Vec<u8> {
+        let v = match self {
+            Value::Vector(val) => val,
+            _ => {
+                panic!("something wrong!");
+            }
+        };
+        v
     }
 }
