@@ -110,14 +110,7 @@ impl transaction::Service for MemoryStorage {
     fn begin(&self, req: BeginRequest) -> RpcFuture<BeginResponse> {
         let txn = MemoryStorageTransaction {
             oracle: self.oracle.clone(),
-            start_ts: self
-                .oracle
-                .lock()
-                .unwrap()
-                .get_timestamp(&GetTimestamp {})
-                .wait()
-                .unwrap()
-                .ts,
+            start_ts: req.start_ts,
             data: self.data.clone(),
             writes: vec![],
         };
@@ -191,14 +184,7 @@ impl transaction::Service for MemoryStorage {
         }
 
         // Commit primary first.
-        let commit_ts = txn
-            .oracle
-            .lock()
-            .unwrap()
-            .get_timestamp(&GetTimestamp {})
-            .wait()
-            .unwrap()
-            .ts;
+        let commit_ts = req.commit_ts;
         let mut kv_data = txn.data.lock().unwrap();
 
         if kv_data

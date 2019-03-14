@@ -6,6 +6,7 @@ extern crate labcodec;
 #[macro_use]
 extern crate labrpc;
 
+mod client;
 mod imp;
 mod service;
 #[cfg(test)]
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time;
 
-use crate::service::Client;
+use crate::service::TSOClient;
 
 type Key = (Vec<u8>, u64);
 
@@ -47,7 +48,7 @@ struct Write(Vec<u8>, Vec<u8>);
 
 #[derive(Clone)]
 pub struct MemoryStorageTransaction {
-    oracle: Arc<Mutex<Client>>,
+    oracle: Arc<Mutex<TSOClient>>,
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
     writes: Vec<Write>,
@@ -56,12 +57,12 @@ pub struct MemoryStorageTransaction {
 #[derive(Clone)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
-    oracle: Arc<Mutex<Client>>,
+    oracle: Arc<Mutex<TSOClient>>,
     transactions: Arc<Mutex<HashMap<u64, MemoryStorageTransaction>>>,
 }
 
 impl MemoryStorage {
-    pub fn new(client: Client) -> Self {
+    pub fn new(client: TSOClient) -> Self {
         Self {
             data: Arc::new(Mutex::new(KvTable::default())),
             oracle: Arc::new(Mutex::new(client)),

@@ -16,7 +16,7 @@ service! {
     }
 }
 
-pub use timestamp::{add_service, Client, Service};
+pub use timestamp::{add_service as add_tso_service, Client as TSOClient, Service};
 
 #[derive(Clone, PartialEq, Message)]
 pub struct GetRequest {
@@ -49,6 +49,8 @@ pub struct SetResponse {}
 pub struct CommitRequest {
     #[prost(uint64, tag = "1")]
     pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub commit_ts: u64,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -61,6 +63,8 @@ pub struct CommitResponse {
 pub struct BeginRequest {
     #[prost(uint64, tag = "1")]
     pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub start_ts: u64,
 }
 
 #[derive(Clone, PartialEq, Message)]

@@ -1,21 +1,11 @@
-use crate::service::{
-    add_service, add_transaction_service, Client, TimestampService, TransactionClient,
-};
-use crate::service::{BeginRequest, CommitRequest, GetRequest, SetRequest};
+use crate::client::Client;
+use crate::service::{add_transaction_service, add_tso_service, TSOClient, TimestampService};
 use crate::MemoryStorage;
 
-use futures::Future;
 use labrpc::*;
 
-fn add_txn_client(rn: &Network, client_name: &str, server_name: &str) -> TransactionClient {
-    let client = TransactionClient::new(rn.create_client(client_name.to_owned()));
-    rn.enable(client_name, true);
-    rn.connect(client_name, server_name);
-    client
-}
-
-fn add_tso_client(rn: &Network, client_name: &str, server_name: &str) -> Client {
-    let client = Client::new(rn.create_client(client_name.to_owned()));
+fn add_tso_client(rn: &Network, client_name: &str, server_name: &str) -> TSOClient {
+    let client = TSOClient::new(rn.create_client(client_name.to_owned()));
     rn.enable(client_name, true);
     rn.connect(client_name, server_name);
     client
@@ -30,7 +20,7 @@ fn test_predicate_many_preceders_read_predicates() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -40,71 +30,27 @@ fn test_predicate_many_preceders_read_predicates() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+    assert!(client2.get(2, b"3".to_vec()).is_empty());
 
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"3".to_vec()
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
+    client3.set(3, b"3".to_vec(), b"30".to_vec());
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
 
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"3".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"3".to_vec()
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
+    assert!(client2.get(2, b"3".to_vec()).is_empty());
 }
 
 #[test]
@@ -116,7 +62,7 @@ fn test_predicate_many_preceders_write_predicates() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -126,83 +72,32 @@ fn test_predicate_many_preceders_write_predicates() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"1".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"2".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"2".to_vec(),
-            value: b"40".to_vec(),
-        })
-        .wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    assert!(
-        txn_client2
-            .commit(&CommitRequest { id: 2 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    assert!(
-        !txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
+
+    client2.set(2, b"1".to_vec(), b"20".to_vec());
+    client2.set(2, b"2".to_vec(), b"30".to_vec());
+    assert_eq!(client2.get(2, b"2".to_vec()), b"20".to_vec());
+
+    client3.set(3, b"2".to_vec(), b"40".to_vec());
+    let commit_ts = client2.get_timestamp();
+    assert!(client2.commit(2, commit_ts));
+
+    let commit_ts = client3.get_timestamp();
+    assert!(!client3.commit(3, commit_ts));
 }
 
 #[test]
@@ -214,7 +109,7 @@ fn test_lost_update() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -224,90 +119,33 @@ fn test_lost_update() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
 
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
 
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"1".to_vec(),
-            value: b"11".to_vec(),
-        })
-        .wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"1".to_vec(),
-            value: b"11".to_vec(),
-        })
-        .wait();
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"1".to_vec()), b"10".to_vec());
 
-    assert!(
-        txn_client2
-            .commit(&CommitRequest { id: 2 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    assert!(
-        !txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    client2.set(2, b"1".to_vec(), b"11".to_vec());
+    client3.set(3, b"1".to_vec(), b"11".to_vec());
+
+    let commit_ts = client2.get_timestamp();
+    assert!(client2.commit(2, commit_ts));
+
+    let commit_ts = client3.get_timestamp();
+    assert!(!client3.commit(3, commit_ts));
 }
 
 #[test]
@@ -319,7 +157,7 @@ fn test_read_skew_read_only() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -329,104 +167,33 @@ fn test_read_skew_read_only() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
 
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"1".to_vec(),
-            value: b"12".to_vec(),
-        })
-        .wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"2".to_vec(),
-            value: b"18".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
 
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"2".to_vec()), b"20".to_vec());
+
+    client3.set(3, b"1".to_vec(), b"12".to_vec());
+    client3.set(3, b"2".to_vec(), b"18".to_vec());
+
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
+
+    assert_eq!(client2.get(2, b"2".to_vec()), b"20".to_vec());
 }
 
 #[test]
@@ -438,7 +205,7 @@ fn test_read_skew_predicate_dependencies() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -448,84 +215,30 @@ fn test_read_skew_predicate_dependencies() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
 
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"3".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
 
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"3".to_vec(),
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client2.get(2, b"2".to_vec()), b"20".to_vec());
+
+    client3.set(3, b"3".to_vec(), b"30".to_vec());
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
+
+    assert!(client2.get(2, b"3".to_vec()).is_empty());
 }
 
 #[test]
@@ -537,7 +250,7 @@ fn test_read_skew_write_predicate() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -547,106 +260,35 @@ fn test_read_skew_write_predicate() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"1".to_vec(),
-            value: b"12".to_vec(),
-        })
-        .wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"2".to_vec(),
-            value: b"18".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
 
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"2".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    assert!(
-        !txn_client2
-            .commit(&CommitRequest { id: 2 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
+
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"2".to_vec()), b"20".to_vec());
+
+    client3.set(3, b"1".to_vec(), b"12".to_vec());
+    client3.set(3, b"2".to_vec(), b"18".to_vec());
+
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
+
+    client2.set(2, b"2".to_vec(), b"30".to_vec());
+    let commit_ts = client2.get_timestamp();
+    assert!(!client2.commit(2, commit_ts));
 }
 
 #[test]
@@ -658,7 +300,7 @@ fn test_write_skew() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -668,109 +310,34 @@ fn test_write_skew() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client3
-            .get(&GetRequest {
-                id: 3,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"1".to_vec(),
-            value: b"11".to_vec(),
-        })
-        .wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"2".to_vec(),
-            value: b"21".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client2
-            .commit(&CommitRequest { id: 2 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
+
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client2.get(2, b"2".to_vec()), b"20".to_vec());
+    assert_eq!(client3.get(3, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client3.get(3, b"2".to_vec()), b"20".to_vec());
+
+    client2.set(2, b"1".to_vec(), b"11".to_vec());
+    client3.set(3, b"2".to_vec(), b"21".to_vec());
+
+    let commit_ts = client2.get_timestamp();
+    assert!(client2.commit(2, commit_ts));
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
 }
 
 #[test]
@@ -782,7 +349,7 @@ fn test_anti_dependency_cycles() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -792,90 +359,36 @@ fn test_anti_dependency_cycles() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    let client_name = "txn3";
-    let txn_client3 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client3.begin(&BeginRequest { id: 3 }).wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
 
-    let _ = txn_client2
-        .set(&SetRequest {
-            id: 2,
-            key: b"3".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    let _ = txn_client3
-        .set(&SetRequest {
-            id: 3,
-            key: b"4".to_vec(),
-            value: b"42".to_vec(),
-        })
-        .wait();
-    assert!(
-        txn_client2
-            .commit(&CommitRequest { id: 2 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    assert!(
-        txn_client3
-            .commit(&CommitRequest { id: 3 })
-            .wait()
-            .unwrap()
-            .res
-    );
-    let client_name = "txn4";
-    let txn_client4 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client4.begin(&BeginRequest { id: 4 }).wait();
-    assert_eq!(
-        txn_client4
-            .get(&GetRequest {
-                id: 4,
-                key: b"3".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"30".to_vec()
-    );
-    assert_eq!(
-        txn_client4
-            .get(&GetRequest {
-                id: 4,
-                key: b"4".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"42".to_vec()
-    );
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+
+    let client3 = Client::new(&rn, "txn3", "tso3", "server", "tso_server");
+    let start_ts = client3.get_timestamp();
+    client3.begin(3, start_ts);
+
+    client2.set(2, b"3".to_vec(), b"30".to_vec());
+    client3.set(3, b"4".to_vec(), b"42".to_vec());
+
+    let commit_ts = client2.get_timestamp();
+    assert!(client2.commit(2, commit_ts));
+    let commit_ts = client3.get_timestamp();
+    assert!(client3.commit(3, commit_ts));
+
+    let client4 = Client::new(&rn, "txn4", "tso4", "server", "tso_server");
+    let start_ts = client4.get_timestamp();
+    client4.begin(4, start_ts);
+
+    assert_eq!(client4.get(4, b"3".to_vec()), b"30".to_vec());
+    assert_eq!(client4.get(4, b"4".to_vec()), b"42".to_vec());
 }
 
 #[test]
@@ -887,7 +400,7 @@ fn test_commit_primary_then_fail() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -897,94 +410,31 @@ fn test_commit_primary_then_fail() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"3".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"4".to_vec(),
-            value: b"40".to_vec(),
-        })
-        .wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    client1.set(1, b"3".to_vec(), b"30".to_vec());
+    client1.set(1, b"4".to_vec(), b"40".to_vec());
+
     fail::setup();
     fail::cfg("commit_secondaries_fail", "return()").unwrap();
-    assert!(
-        txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
+
+    let commit_ts = client1.get_timestamp();
+    assert!(client1.commit(1, commit_ts));
+
     fail::remove("commit_secondaries_fail");
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"1".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"10".to_vec()
-    );
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"2".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"20".to_vec()
-    );
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"3".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"30".to_vec()
-    );
-    assert_eq!(
-        txn_client2
-            .get(&GetRequest {
-                id: 2,
-                key: b"4".to_vec(),
-            })
-            .wait()
-            .unwrap()
-            .value,
-        b"40".to_vec()
-    );
+
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+
+    assert_eq!(client2.get(2, b"1".to_vec()), b"10".to_vec());
+    assert_eq!(client2.get(2, b"2".to_vec()), b"20".to_vec());
+    assert_eq!(client2.get(2, b"3".to_vec()), b"30".to_vec());
+    assert_eq!(client2.get(2, b"4".to_vec()), b"40".to_vec());
 }
 
 #[test]
@@ -996,7 +446,7 @@ fn test_commit_primary_fail() {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_service(TimestampService, &mut tso_server_builder).unwrap();
+    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
     let client_name = "tso_client";
     let client = add_tso_client(&rn, client_name, tso_server_name);
     let store = MemoryStorage::new(client);
@@ -1006,84 +456,29 @@ fn test_commit_primary_fail() {
     rn.add_server(tso_server.clone());
     rn.add_server(server.clone());
 
-    let client_name = "txn1";
-    let txn_client1 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client1.begin(&BeginRequest { id: 1 }).wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"1".to_vec(),
-            value: b"10".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"2".to_vec(),
-            value: b"20".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"3".to_vec(),
-            value: b"30".to_vec(),
-        })
-        .wait();
-    let _ = txn_client1
-        .set(&SetRequest {
-            id: 1,
-            key: b"4".to_vec(),
-            value: b"40".to_vec(),
-        })
-        .wait();
+    let client1 = Client::new(&rn, "txn1", "tso1", "server", "tso_server");
+    let start_ts = client1.get_timestamp();
+    client1.begin(1, start_ts);
+
+    client1.set(1, b"1".to_vec(), b"10".to_vec());
+    client1.set(1, b"2".to_vec(), b"20".to_vec());
+    client1.set(1, b"3".to_vec(), b"30".to_vec());
+    client1.set(1, b"4".to_vec(), b"40".to_vec());
+
     fail::setup();
     fail::cfg("commit_primary_fail", "return()").unwrap();
-    assert!(
-        !txn_client1
-            .commit(&CommitRequest { id: 1 })
-            .wait()
-            .unwrap()
-            .res
-    );
+
+    let commit_ts = client1.get_timestamp();
+    assert!(!client1.commit(1, commit_ts));
+
     fail::remove("commit_primary_fail");
-    let client_name = "txn2";
-    let txn_client2 = add_txn_client(&rn, client_name, server_name);
-    let _ = txn_client2.begin(&BeginRequest { id: 2 }).wait();
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"1".to_vec(),
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"2".to_vec(),
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"3".to_vec(),
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
-    assert!(txn_client2
-        .get(&GetRequest {
-            id: 2,
-            key: b"4".to_vec(),
-        })
-        .wait()
-        .unwrap()
-        .value
-        .is_empty());
+
+    let client2 = Client::new(&rn, "txn2", "tso2", "server", "tso_server");
+    let start_ts = client2.get_timestamp();
+    client2.begin(2, start_ts);
+
+    assert!(client2.get(2, b"1".to_vec()).is_empty());
+    assert!(client2.get(2, b"2".to_vec()).is_empty());
+    assert!(client2.get(2, b"3".to_vec()).is_empty());
+    assert!(client2.get(2, b"4".to_vec()).is_empty());
 }
