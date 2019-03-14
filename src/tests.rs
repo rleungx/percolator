@@ -1,6 +1,8 @@
-use crate::{add_service, add_transaction_service, Client};
-use crate::{BeginRequest, CommitRequest, GetRequest, SetRequest};
-use crate::{MemoryStorage, TimestampService, TransactionClient};
+use crate::service::{
+    add_service, add_transaction_service, Client, TimestampService, TransactionClient,
+};
+use crate::service::{BeginRequest, CommitRequest, GetRequest, SetRequest};
+use crate::MemoryStorage;
 
 use labrpc::*;
 

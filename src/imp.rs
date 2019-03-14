@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::timestamp::*;
+use crate::service::*;
 use crate::*;
 
 const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(1).as_nanos() as u64;
@@ -316,22 +316,20 @@ impl Service for TimestampService {
 
 impl Value {
     fn unwrap_ts(self) -> u64 {
-        let ts = match self {
+        match self {
             Value::Timestamp(ts) => ts,
             _ => {
                 panic!("something wrong!");
             }
-        };
-        ts
+        }
     }
 
     fn unwrap_vec(self) -> Vec<u8> {
-        let v = match self {
+        match self {
             Value::Vector(val) => val,
             _ => {
                 panic!("something wrong!");
             }
-        };
-        v
+        }
     }
 }
