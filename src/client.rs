@@ -1,6 +1,9 @@
 use crate::service::{BeginRequest, CommitRequest, GetRequest, GetTimestamp, SetRequest};
 use crate::service::{TSOClient, TransactionClient};
 
+use std::thread;
+use std::time::Duration;
+
 use futures::Future;
 use labrpc::*;
 
@@ -8,6 +11,8 @@ pub struct Client {
     txn_client: TransactionClient,
     tso_client: TSOClient,
 }
+
+const BACKOFF_TIME_MS: u64 = 100;
 
 impl Client {
     pub fn new(
@@ -29,12 +34,21 @@ impl Client {
         }
     }
 
-    pub fn get_timestamp(&self) -> u64 {
-        self.tso_client
-            .get_timestamp(&GetTimestamp {})
-            .wait()
-            .unwrap()
-            .ts
+    pub fn try_get_timestamp(&self, retry: usize) -> Result<u64> {
+        let mut backoff = BACKOFF_TIME_MS;
+        for _i in 0..retry {
+            match self.tso_client.get_timestamp(&GetTimestamp {}).wait() {
+                Ok(res) => {
+                    return Ok(res.ts);
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(backoff));
+                    backoff *= 2;
+                    continue;
+                }
+            }
+        }
+        Err(Error::Timeout)
     }
 
     pub fn begin(&self, id: u64, start_ts: u64) {
