@@ -4,8 +4,7 @@ build:
 	cargo build
 
 test:
-	cargo test --features "no-fail" 
-	cargo test -- --test-threads=1
+	cargo test
 
 clean:
 	cargo clean

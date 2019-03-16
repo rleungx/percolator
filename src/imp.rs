@@ -1,14 +1,12 @@
-use std::thread;
 use std::time::Duration;
 
+use crate::msg::*;
 use crate::service::*;
 use crate::*;
 
-use futures::Future;
-use labrpc::RpcFuture;
+use labrpc::{Error, RpcFuture};
 
 const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(1).as_nanos() as u64;
-const BACKOFF_TIME_MS: u64 = 500;
 
 impl KvTable {
     #[inline]
@@ -107,174 +105,120 @@ impl KvTable {
 }
 
 impl transaction::Service for MemoryStorage {
-    fn begin(&self, req: BeginRequest) -> RpcFuture<BeginResponse> {
-        let txn = MemoryStorageTransaction {
-            oracle: self.oracle.clone(),
-            start_ts: req.start_ts,
-            data: self.data.clone(),
-            writes: vec![],
-        };
-        self.transactions.lock().unwrap().insert(req.id, txn);
-
-        Box::new(futures::future::result(Ok(BeginResponse {})))
-    }
-
     fn get(&self, req: GetRequest) -> RpcFuture<GetResponse> {
-        let txns = self.transactions.lock().unwrap();
-        let txn = txns.get(&req.id).unwrap();
-        loop {
-            let key = req.key.clone();
-            let snapshot = txn.data.lock().unwrap().clone();
+        let key = req.key.clone();
+        let snapshot = self.data.lock().unwrap().clone();
 
-            if snapshot
-                .read(key.clone(), CF::Lock, None, Some(txn.start_ts))
-                .is_some()
-            {
-                // Check for locks that signal concurrent writes.
-                txn.back_off_maybe_clean_up_lock(key.clone());
-                continue;
-            }
-
-            // Find the latest write below our start timestamp.
-            let data_ts = match snapshot.read(key.clone(), CF::Write, None, Some(txn.start_ts)) {
-                Some(res) => (*(res.1)).clone().unwrap_ts(),
-                None => {
-                    return Box::new(futures::future::result(Ok(GetResponse {
-                        value: Vec::new(),
-                    })))
-                }
-            };
-            let v = match snapshot.read(key.clone(), CF::Data, Some(data_ts), Some(data_ts)) {
-                Some(res) => (*(res.1)).clone().unwrap_vec(),
-                None => {
-                    return Box::new(futures::future::result(Ok(GetResponse {
-                        value: Vec::new(),
-                    })))
-                }
-            };
-
-            return Box::new(futures::future::result(Ok(GetResponse { value: v })));
+        if snapshot
+            .read(key.clone(), CF::Lock, None, Some(req.start_ts))
+            .is_some()
+        {
+            // Check for locks that signal concurrent writes.
+            self.back_off_maybe_clean_up_lock(req.start_ts, key.clone());
+            return Box::new(futures::future::result(Err(Error::Other(
+                "Backoff".to_string(),
+            ))));
         }
+
+        // Find the latest write below our start timestamp.
+        let data_ts = match snapshot.read(key.clone(), CF::Write, None, Some(req.start_ts)) {
+            Some(res) => (*(res.1)).clone().unwrap_ts(),
+            None => {
+                return Box::new(futures::future::result(Ok(GetResponse {
+                    value: Vec::new(),
+                })))
+            }
+        };
+        let v = match snapshot.read(key.clone(), CF::Data, Some(data_ts), Some(data_ts)) {
+            Some(res) => (*(res.1)).clone().unwrap_vec(),
+            None => {
+                return Box::new(futures::future::result(Ok(GetResponse {
+                    value: Vec::new(),
+                })))
+            }
+        };
+
+        return Box::new(futures::future::result(Ok(GetResponse { value: v })));
     }
 
-    fn set(&self, req: SetRequest) -> RpcFuture<SetResponse> {
-        let mut txns = self.transactions.lock().unwrap();
-        let txn = txns.get_mut(&req.id).unwrap();
-        let key = req.key;
-        let value = req.value;
-        txn.writes.push(Write(key, value));
-        Box::new(futures::future::result(Ok(SetResponse {})))
-    }
-
-    fn commit(&self, req: CommitRequest) -> RpcFuture<CommitResponse> {
-        let txns = self.transactions.lock().unwrap();
-        let txn = txns.get(&req.id).unwrap();
-        let primary = &txn.writes[0];
-
-        let secondaries = &txn.writes[1..];
-
-        if !txn.prewrite(primary, primary) {
-            return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
-        }
-
-        for w in secondaries {
-            if !txn.prewrite(w, primary) {
-                return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
-            }
-        }
-
-        // Commit primary first.
-        let commit_ts = req.commit_ts;
-        let mut kv_data = txn.data.lock().unwrap();
+    // Prewrite tries to lock cell w, returning false in case of conflict.
+    fn prewrite(&self, req: PrewriteRequest) -> RpcFuture<PrewriteResponse> {
+        let mut kv_data = self.data.lock().unwrap();
 
         if kv_data
             .read(
-                primary.0.clone(),
-                CF::Lock,
-                Some(txn.start_ts),
-                Some(txn.start_ts),
-            )
-            .is_none()
-        {
-            // Lock is not found.
-            return Box::new(futures::future::result(Ok(CommitResponse { res: false })));
-        }
-
-        kv_data.write(
-            primary.0.clone(),
-            CF::Write,
-            commit_ts,
-            Value::Timestamp(txn.start_ts),
-        );
-        fail_point!("commit_primary_fail", |_| {
-            Box::new(futures::future::result(Ok(CommitResponse { res: false })))
-        });
-        kv_data.erase(primary.0.clone(), CF::Lock, commit_ts);
-        fail_point!("commit_secondaries_fail", |_| {
-            Box::new(futures::future::result(Ok(CommitResponse { res: true })))
-        });
-
-        // Second phase: write out write records for secondary cells.
-        for w in secondaries {
-            kv_data.write(
-                w.0.clone(),
+                req.write.as_ref().unwrap().key.clone(),
                 CF::Write,
-                commit_ts,
-                Value::Timestamp(txn.start_ts),
-            );
-            kv_data.erase(w.0.clone(), CF::Lock, commit_ts);
-        }
-
-        Box::new(futures::future::result(Ok(CommitResponse { res: true })))
-    }
-}
-
-impl MemoryStorageTransaction {
-    // Prewrite tries to lock cell w, returning false in case of conflict.
-    fn prewrite(&self, w: &Write, primary: &Write) -> bool {
-        let mut kv_data = self.data.lock().unwrap();
-
-        if kv_data
-            .read(w.0.clone(), CF::Write, Some(self.start_ts), None)
+                Some(req.start_ts),
+                None,
+            )
             .is_some()
         {
             // Abort on writes after our start timestamp ...
-            return false;
+            return Box::new(futures::future::result(Err(Error::Other("write conflict".to_string()))));
         }
 
-        if kv_data.read(w.0.clone(), CF::Lock, None, None).is_some() {
+        if kv_data
+            .read(req.write.as_ref().unwrap().key.clone(), CF::Lock, None, None)
+            .is_some()
+        {
             // ... or locks at any timestamp.
-            return false;
+            return Box::new(futures::future::result(Err(Error::Other("key has already locked".to_string()))));
         }
 
         kv_data.write(
-            w.0.clone(),
+            req.write.as_ref().unwrap().key.clone(),
             CF::Data,
-            self.start_ts,
-            Value::Vector(w.1.clone()),
+            req.start_ts,
+            Value::Vector(req.write.as_ref().unwrap().value.clone()),
         );
         kv_data.write(
-            w.0.clone(),
+            req.write.as_ref().unwrap().key.clone(),
             CF::Lock,
-            self.start_ts,
-            Value::Vector(primary.0.clone()),
+            req.start_ts,
+            Value::Vector(req.primary.unwrap().key.clone()),
         );
 
-        true
+        Box::new(futures::future::result(Ok(PrewriteResponse {})))
     }
 
-    fn back_off_maybe_clean_up_lock(&self, key: Vec<u8>) {
+    fn commit(&self, req: CommitRequest) -> RpcFuture<CommitResponse> {
+        let mut kv_data = self.data.lock().unwrap();
+        if req.is_primary {
+            if kv_data
+                .read(
+                    req.write.as_ref().unwrap().key.clone(),
+                    CF::Lock,
+                    Some(req.start_ts),
+                    Some(req.start_ts),
+                )
+                .is_none()
+            {
+                // Lock is not found.
+                return Box::new(futures::future::result(Err(Error::Other("lock is not found".to_string()))));
+            }
+        }
+
+        kv_data.write(
+            req.write.as_ref().unwrap().key.clone(),
+            CF::Write,
+            req.commit_ts,
+            Value::Timestamp(req.start_ts),
+        );
+        kv_data.erase(req.write.as_ref().unwrap().key.clone(), CF::Lock, req.commit_ts);
+
+        Box::new(futures::future::result(Ok(CommitResponse {})))
+    }
+}
+
+impl MemoryStorage {
+    fn back_off_maybe_clean_up_lock(&self, start_ts: u64, key: Vec<u8>) {
         let mut kv_data = self.data.lock().unwrap();
 
-        if let Some(r) = kv_data.read(key.clone(), CF::Lock, None, Some(self.start_ts)) {
-            let response = self
-                .oracle
-                .lock()
-                .unwrap()
-                .get_timestamp(&GetTimestamp {})
-                .wait()
-                .unwrap();
-            if response.ts - (*r.0).1 > MAX_TIME_TO_ALIVE {
+        if let Some(r) = kv_data.read(key.clone(), CF::Lock, None, Some(start_ts)) {
+            let now = time::SystemTime::now();
+            let current_ts = now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64;
+            if current_ts - (*r.0).1 > MAX_TIME_TO_ALIVE {
                 let primary = (*r.1).clone().unwrap_vec().clone();
                 let ts = (*r.0).1;
                 if kv_data
@@ -299,8 +243,6 @@ impl MemoryStorageTransaction {
                 return;
             }
         }
-
-        thread::sleep(Duration::from_millis(BACKOFF_TIME_MS));
     }
 }
 

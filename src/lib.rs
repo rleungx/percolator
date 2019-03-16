@@ -1,6 +1,4 @@
 #[macro_use]
-extern crate fail;
-#[macro_use]
 extern crate prost_derive;
 extern crate labcodec;
 #[macro_use]
@@ -12,12 +10,14 @@ mod service;
 #[cfg(test)]
 mod tests;
 
+mod msg {
+    include!(concat!(env!("OUT_DIR"), "/msg.rs"));
+}
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time;
-
-use crate::service::TSOClient;
 
 type Key = (Vec<u8>, u64);
 
@@ -48,7 +48,6 @@ struct Write(Vec<u8>, Vec<u8>);
 
 #[derive(Clone)]
 pub struct MemoryStorageTransaction {
-    oracle: Arc<Mutex<TSOClient>>,
     start_ts: u64,
     data: Arc<Mutex<KvTable>>,
     writes: Vec<Write>,
@@ -57,15 +56,13 @@ pub struct MemoryStorageTransaction {
 #[derive(Clone)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
-    oracle: Arc<Mutex<TSOClient>>,
     transactions: Arc<Mutex<HashMap<u64, MemoryStorageTransaction>>>,
 }
 
 impl MemoryStorage {
-    pub fn new(client: TSOClient) -> Self {
+    pub fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(KvTable::default())),
-            oracle: Arc::new(Mutex::new(client)),
             transactions: Arc::new(Mutex::new(HashMap::new())),
         }
     }

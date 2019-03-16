@@ -2,9 +2,9 @@
 name = "percolator"
 version = "0.1.0"
 edition = "2018"
+build = "build.rs"
 
 [dependencies]
-fail = "0.2"
 futures = "0.1"
 prost-derive = "0.4.0"
 prost = "0.4"
@@ -12,6 +12,5 @@ bytes = "0.4.7"
 labrpc = { git = "https://github.com/overvenus/labs6824.git" }
 labcodec = { git = "https://github.com/overvenus/labs6824.git" }
 
-[features]
-default = []
-no-fail = ["fail/no_fail"]
+[build-dependencies]
+prost-build = "0.4.0"
