@@ -21,6 +21,7 @@ pub struct Client {
 }
 
 const BACKOFF_TIME_MS: u64 = 100;
+const RETRY_TIMES: usize = 3;
 
 impl Client {
     pub fn new(
@@ -45,9 +46,9 @@ impl Client {
         }
     }
 
-    pub fn try_get_timestamp(&self, retry: usize) -> Result<u64> {
+    pub fn try_get_timestamp(&self) -> Result<u64> {
         let mut backoff = BACKOFF_TIME_MS;
-        for _i in 0..retry {
+        for _i in 0..RETRY_TIMES {
             match self.tso_client.get_timestamp(&GetTimestamp {}).wait() {
                 Ok(res) => {
                     return Ok(res.ts);
@@ -63,21 +64,28 @@ impl Client {
     }
 
     pub fn begin(&mut self) {
-        let start_ts = self.try_get_timestamp(1).unwrap();
+        let start_ts = match self.try_get_timestamp() {
+            Ok(ts) => ts,
+            Err(Error::Timeout) => {
+                println!("get timestamp timeout");
+                return;
+            }
+            Err(_) => panic!("unexpected behavior"),
+        };
         self.txn = Transaction {
             start_ts,
             writes: vec![],
         };
     }
 
-    pub fn get(&self, key: Vec<u8>, retry: usize) -> Result<Vec<u8>> {
+    pub fn get(&self, key: Vec<u8>) -> Result<Vec<u8>> {
         let mut backoff = BACKOFF_TIME_MS;
-        for _i in 0..retry {
+        for _i in 0..RETRY_TIMES {
             match self
                 .txn_client
                 .get(&GetRequest {
                     start_ts: self.txn.start_ts,
-                    key:key.clone(),
+                    key: key.clone(),
                 })
                 .wait()
             {
@@ -102,7 +110,7 @@ impl Client {
         let primary = &self.txn.writes[0];
         let secondaries = &self.txn.writes[1..];
 
-        if let Err(_) = self
+        if self
             .txn_client
             .prewrite(&PrewriteRequest {
                 start_ts: self.txn.start_ts,
@@ -115,13 +123,13 @@ impl Client {
                     value: primary.1.clone(),
                 }),
             })
-            .wait()
+            .wait().is_err()
         {
             return false;
         }
 
         for w in secondaries {
-            if let Err(_) = self
+            if self
                 .txn_client
                 .prewrite(&PrewriteRequest {
                     start_ts: self.txn.start_ts,
@@ -134,44 +142,51 @@ impl Client {
                         value: primary.1.clone(),
                     }),
                 })
-                .wait()
+                .wait().is_err()
             {
                 return false;
             }
         }
 
-        let commit_ts = self.try_get_timestamp(1).unwrap();
+        let commit_ts = match self.try_get_timestamp() {
+            Ok(ts) => ts,
+            Err(Error::Timeout) => {
+                println!("get timestamp timeout");
+                return false;
+            }
+            Err(_) => panic!("unexpected behavior"),
+        };
         // Commit primary first.
-        if let Err(_) = self
+        if self
             .txn_client
             .commit(&CommitRequest {
                 is_primary: true,
                 start_ts: self.txn.start_ts,
-                commit_ts: commit_ts,
+                commit_ts,
                 write: Some(crate::msg::Write {
                     key: primary.0.clone(),
                     value: primary.1.clone(),
                 }),
             })
-            .wait()
+            .wait().is_err()
         {
             return false;
         }
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {
-            if let Err(_) = self
+            if self
                 .txn_client
                 .commit(&CommitRequest {
                     is_primary: false,
                     start_ts: self.txn.start_ts,
-                    commit_ts: commit_ts,
+                    commit_ts,
                     write: Some(crate::msg::Write {
                         key: w.0.clone(),
                         value: w.1.clone(),
                     }),
                 })
-                .wait()
+                .wait().is_err()
             {
                 return false;
             }

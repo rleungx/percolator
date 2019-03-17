@@ -4,6 +4,7 @@ extern crate labcodec;
 #[macro_use]
 extern crate labrpc;
 
+#[allow(dead_code)]
 mod client;
 mod imp;
 mod service;
@@ -53,17 +54,8 @@ pub struct MemoryStorageTransaction {
     writes: Vec<Write>,
 }
 
-#[derive(Clone)]
+#[derive(Clone,Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
     transactions: Arc<Mutex<HashMap<u64, MemoryStorageTransaction>>>,
-}
-
-impl MemoryStorage {
-    pub fn new() -> Self {
-        Self {
-            data: Arc::new(Mutex::new(KvTable::default())),
-            transactions: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
 }

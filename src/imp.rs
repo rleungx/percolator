@@ -138,7 +138,7 @@ impl transaction::Service for MemoryStorage {
             }
         };
 
-        return Box::new(futures::future::result(Ok(GetResponse { value: v })));
+        Box::new(futures::future::result(Ok(GetResponse { value: v })))
     }
 
     // Prewrite tries to lock cell w, returning false in case of conflict.
@@ -155,15 +155,24 @@ impl transaction::Service for MemoryStorage {
             .is_some()
         {
             // Abort on writes after our start timestamp ...
-            return Box::new(futures::future::result(Err(Error::Other("write conflict".to_string()))));
+            return Box::new(futures::future::result(Err(Error::Other(
+                "write conflict".to_string(),
+            ))));
         }
 
         if kv_data
-            .read(req.write.as_ref().unwrap().key.clone(), CF::Lock, None, None)
+            .read(
+                req.write.as_ref().unwrap().key.clone(),
+                CF::Lock,
+                None,
+                None,
+            )
             .is_some()
         {
             // ... or locks at any timestamp.
-            return Box::new(futures::future::result(Err(Error::Other("key has already locked".to_string()))));
+            return Box::new(futures::future::result(Err(Error::Other(
+                "key has already locked".to_string(),
+            ))));
         }
 
         kv_data.write(
@@ -184,8 +193,7 @@ impl transaction::Service for MemoryStorage {
 
     fn commit(&self, req: CommitRequest) -> RpcFuture<CommitResponse> {
         let mut kv_data = self.data.lock().unwrap();
-        if req.is_primary {
-            if kv_data
+            if req.is_primary && kv_data
                 .read(
                     req.write.as_ref().unwrap().key.clone(),
                     CF::Lock,
@@ -195,9 +203,10 @@ impl transaction::Service for MemoryStorage {
                 .is_none()
             {
                 // Lock is not found.
-                return Box::new(futures::future::result(Err(Error::Other("lock is not found".to_string()))));
+                return Box::new(futures::future::result(Err(Error::Other(
+                    "lock is not found".to_string(),
+                ))));
             }
-        }
 
         kv_data.write(
             req.write.as_ref().unwrap().key.clone(),
@@ -205,7 +214,11 @@ impl transaction::Service for MemoryStorage {
             req.commit_ts,
             Value::Timestamp(req.start_ts),
         );
-        kv_data.erase(req.write.as_ref().unwrap().key.clone(), CF::Lock, req.commit_ts);
+        kv_data.erase(
+            req.write.as_ref().unwrap().key.clone(),
+            CF::Lock,
+            req.commit_ts,
+        );
 
         Box::new(futures::future::result(Ok(CommitResponse {})))
     }
