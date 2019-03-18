@@ -8,15 +8,16 @@ use std::time::Duration;
 use futures::Future;
 use labrpc::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Transaction {
     start_ts: u64,
     writes: Vec<Write>,
 }
 
+#[derive(Clone)]
 pub struct Client {
-    txn_client: TransactionClient,
     tso_client: TSOClient,
+    txn_client: TransactionClient,
     txn: Transaction,
 }
 
@@ -24,22 +25,10 @@ const BACKOFF_TIME_MS: u64 = 100;
 const RETRY_TIMES: usize = 3;
 
 impl Client {
-    pub fn new(
-        rn: &Network,
-        txn_name: &str,
-        tso_name: &str,
-        server_name: &str,
-        tso_server_name: &str,
-    ) -> Client {
-        let txn_client = TransactionClient::new(rn.create_client(txn_name.to_owned()));
-        rn.enable(txn_name, true);
-        rn.connect(txn_name, server_name);
-        let tso_client = TSOClient::new(rn.create_client(tso_name.to_owned()));
-        rn.enable(tso_name, true);
-        rn.connect(tso_name, tso_server_name);
+    pub fn new(tso_client: TSOClient, txn_client: TransactionClient) -> Client {
         Client {
-            txn_client,
             tso_client,
+            txn_client,
             txn: Transaction {
                 ..Default::default()
             },
