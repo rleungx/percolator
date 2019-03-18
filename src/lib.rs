@@ -22,7 +22,7 @@ use std::time;
 
 type Key = (Vec<u8>, u64);
 
-pub enum CF {
+pub enum Column {
     Write,
     Data,
     Lock,
@@ -54,7 +54,7 @@ pub struct MemoryStorageTransaction {
     writes: Vec<Write>,
 }
 
-#[derive(Clone,Default)]
+#[derive(Clone, Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
     transactions: Arc<Mutex<HashMap<u64, MemoryStorageTransaction>>>,

@@ -123,7 +123,8 @@ impl Client {
                     value: primary.1.clone(),
                 }),
             })
-            .wait().is_err()
+            .wait()
+            .is_err()
         {
             return false;
         }
@@ -142,7 +143,8 @@ impl Client {
                         value: primary.1.clone(),
                     }),
                 })
-                .wait().is_err()
+                .wait()
+                .is_err()
             {
                 return false;
             }
@@ -168,7 +170,8 @@ impl Client {
                     value: primary.1.clone(),
                 }),
             })
-            .wait().is_err()
+            .wait()
+            .is_err()
         {
             return false;
         }
@@ -186,7 +189,8 @@ impl Client {
                         value: w.1.clone(),
                     }),
                 })
-                .wait().is_err()
+                .wait()
+                .is_err()
             {
                 return false;
             }
