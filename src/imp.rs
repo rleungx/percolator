@@ -6,7 +6,7 @@ use crate::*;
 
 use labrpc::{Error, RpcFuture};
 
-const MAX_TIME_TO_ALIVE: u64 = Duration::from_secs(1).as_nanos() as u64;
+const MAX_TIME_TO_ALIVE: u64 = Duration::from_millis(100).as_nanos() as u64;
 
 impl KvTable {
     #[inline]
@@ -228,7 +228,6 @@ impl transaction::Service for MemoryStorage {
 impl MemoryStorage {
     fn back_off_maybe_clean_up_lock(&self, start_ts: u64, key: Vec<u8>) {
         let mut kv_data = self.data.lock().unwrap();
-
         if let Some(r) = kv_data.read(key.clone(), Column::Lock, None, Some(start_ts)) {
             let now = time::SystemTime::now();
             let current_ts = now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64;

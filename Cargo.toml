@@ -9,7 +9,7 @@ futures = "0.1"
 prost-derive = "0.4.0"
 prost = "0.4"
 bytes = "0.4.7"
-labrpc = { git = "https://github.com/overvenus/labs6824.git" }
+labrpc = { git = "https://github.com/overvenus/labs6824.git", branch = "rpc-hook" }
 labcodec = { git = "https://github.com/overvenus/labs6824.git" }
 
 [build-dependencies]

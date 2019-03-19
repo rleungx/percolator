@@ -35,7 +35,7 @@ impl Client {
         }
     }
 
-    pub fn try_get_timestamp(&self) -> Result<u64> {
+    pub fn get_timestamp(&self) -> Result<u64> {
         let mut backoff = BACKOFF_TIME_MS;
         for _i in 0..RETRY_TIMES {
             match self.tso_client.get_timestamp(&GetTimestamp {}).wait() {
@@ -53,7 +53,7 @@ impl Client {
     }
 
     pub fn begin(&mut self) {
-        let start_ts = match self.try_get_timestamp() {
+        let start_ts = match self.get_timestamp() {
             Ok(ts) => ts,
             Err(Error::Timeout) => {
                 println!("get timestamp timeout");
@@ -139,7 +139,7 @@ impl Client {
             }
         }
 
-        let commit_ts = match self.try_get_timestamp() {
+        let commit_ts = match self.get_timestamp() {
             Ok(ts) => ts,
             Err(Error::Timeout) => {
                 println!("get timestamp timeout");
@@ -167,7 +167,7 @@ impl Client {
 
         // Second phase: write out write records for secondary cells.
         for w in secondaries {
-            if self
+            let _ = self
                 .txn_client
                 .commit(&CommitRequest {
                     is_primary: false,
@@ -178,11 +178,7 @@ impl Client {
                         value: w.1.clone(),
                     }),
                 })
-                .wait()
-                .is_err()
-            {
-                return false;
-            }
+                .wait();
         }
 
         true
