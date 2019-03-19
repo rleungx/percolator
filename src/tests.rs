@@ -1,7 +1,6 @@
 use crate::client::Client;
-use crate::service::{add_transaction_service, add_tso_service, TimestampService};
-use crate::service::{TSOClient, TransactionClient};
-use crate::MemoryStorage;
+use crate::service::{add_transaction_service, add_tso_service, TSOClient, TransactionClient};
+use crate::{MemoryStorage, TimestampService};
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -18,6 +17,7 @@ struct CommitHooks {
     drop_resp: AtomicBool,
     fail_primary: AtomicBool,
 }
+
 impl RpcHooks for CommitHooks {
     fn before_dispatch(&self, fq_name: &str, req: &[u8]) -> Result<()> {
         if self.drop_req.load(Ordering::Relaxed) {
@@ -83,27 +83,21 @@ fn init(num_clinet: usize) -> (Network, Vec<Client>, Arc<CommitHooks>) {
 #[test]
 fn test_get_timestamp_under_unreliable_network() {
     let (rn, clients, _) = init(3);
-    let client0 = clients[0].to_owned();
-    rn.enable("tso0", false);
-    let client1 = clients[1].to_owned();
-    rn.enable("tso1", false);
-    let client2 = clients[2].to_owned();
-    rn.enable("tso2", false);
+    let mut children = vec![];
 
-    let handle1 = thread::spawn(move || {
-        let res = client0.get_timestamp();
-        assert!(res.is_ok());
-    });
-
-    let handle2 = thread::spawn(move || {
-        let res = client1.get_timestamp();
-        assert!(res.is_ok());
-    });
-
-    let handle3 = thread::spawn(move || {
-        let res = client2.get_timestamp();
-        assert_eq!(res, Err(Error::Timeout));
-    });
+    for i in 0..3 {
+        let client = clients[i].to_owned();
+        let tso_name_string = format!("tso{}", i);
+        rn.enable(tso_name_string.as_str(), false);
+        children.push(thread::spawn(move || {
+            let res = client.get_timestamp();
+            if i == 2 {
+                assert_eq!(res, Err(Error::Timeout));
+            } else {
+                assert!(res.is_ok());
+            }
+        }));
+    }
 
     thread::sleep(Duration::from_millis(100));
     rn.enable("tso0", true);
@@ -112,15 +106,16 @@ fn test_get_timestamp_under_unreliable_network() {
     thread::sleep(Duration::from_millis(400));
     rn.enable("tso2", true);
 
-    handle1.join().unwrap();
-    handle2.join().unwrap();
-    handle3.join().unwrap();
+    for child in children {
+        let _ = child.join();
+    }
 }
 
 #[test]
 // https://github.com/ept/hermitage/blob/master/sqlserver.md#predicate-many-preceders-pmp
 fn test_predicate_many_preceders_read_predicates() {
     let (_, clients, _) = init(3);
+
     let mut client0 = clients[0].to_owned();
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
@@ -328,7 +323,6 @@ fn test_anti_dependency_cycles() {
 
     let mut client3 = clients[3].to_owned();
     client3.begin();
-
     assert_eq!(client3.get(b"3".to_vec()), Ok(b"30".to_vec()));
     assert_eq!(client3.get(b"4".to_vec()), Ok(b"42".to_vec()));
 }
@@ -336,6 +330,7 @@ fn test_anti_dependency_cycles() {
 #[test]
 fn test_commit_primary_drop_secondary_requests() {
     let (_, clients, hook) = init(2);
+
     let mut client0 = clients[0].to_owned();
     client0.begin();
     client0.set(b"3".to_vec(), b"30".to_vec());
@@ -343,6 +338,7 @@ fn test_commit_primary_drop_secondary_requests() {
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_req.store(true, Ordering::Relaxed);
     assert!(client0.commit());
+
     let mut client1 = clients[1].to_owned();
     client1.begin();
     assert_eq!(client1.get(b"3".to_vec()).unwrap(), b"30");
@@ -353,6 +349,7 @@ fn test_commit_primary_drop_secondary_requests() {
 #[test]
 fn test_commit_primary_success() {
     let (_, clients, hook) = init(2);
+
     let mut client0 = clients[0].to_owned();
     client0.begin();
     client0.set(b"3".to_vec(), b"30".to_vec());
@@ -360,6 +357,7 @@ fn test_commit_primary_success() {
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_req.store(true, Ordering::Relaxed);
     assert!(client0.commit());
+
     let mut client1 = clients[1].to_owned();
     client1.begin();
     assert_eq!(client1.get(b"3".to_vec()).unwrap(), b"30");
@@ -370,6 +368,7 @@ fn test_commit_primary_success() {
 #[test]
 fn test_commit_primary_success_without_response() {
     let (_, clients, hook) = init(2);
+
     let mut client0 = clients[0].to_owned();
     client0.begin();
     client0.set(b"3".to_vec(), b"30".to_vec());
@@ -377,6 +376,7 @@ fn test_commit_primary_success_without_response() {
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_resp.store(true, Ordering::Relaxed);
     assert!(!client0.commit());
+
     let mut client1 = clients[1].to_owned();
     client1.begin();
     assert_eq!(client1.get(b"3".to_vec()).unwrap(), b"30");
@@ -387,6 +387,7 @@ fn test_commit_primary_success_without_response() {
 #[test]
 fn test_commit_primary_fail() {
     let (_, clients, hook) = init(2);
+
     let mut client0 = clients[0].to_owned();
     client0.begin();
     client0.set(b"3".to_vec(), b"30".to_vec());
@@ -395,6 +396,7 @@ fn test_commit_primary_fail() {
     hook.drop_req.store(true, Ordering::Relaxed);
     hook.fail_primary.store(true, Ordering::Relaxed);
     assert!(!client0.commit());
+
     let mut client1 = clients[1].to_owned();
     client1.begin();
     assert_eq!(client1.get(b"3".to_vec()), Ok(Vec::new()));

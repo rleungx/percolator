@@ -3,9 +3,6 @@ use crate::msg::{
     PrewriteResponse, Timestamp,
 };
 
-#[derive(Clone)]
-pub struct TimestampService;
-
 service! {
     service timestamp {
         rpc get_timestamp(GetTimestamp) returns (Timestamp);

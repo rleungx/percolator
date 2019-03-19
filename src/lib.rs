@@ -16,7 +16,6 @@ mod msg {
 }
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time;
 
@@ -34,28 +33,40 @@ pub enum Value {
     Vector(Vec<u8>),
 }
 
+impl Value {
+    fn unwrap_ts(self) -> u64 {
+        match self {
+            Value::Timestamp(ts) => ts,
+            _ => {
+                panic!("Something wrong! It should be used for Timestamp");
+            }
+        }
+    }
+
+    fn unwrap_vec(self) -> Vec<u8> {
+        match self {
+            Value::Vector(val) => val,
+            _ => {
+                panic!("Something wrong! It should be used for Vector");
+            }
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct KvTable {
-    // column write <(Vector, Timestamp), Timestamp>
     write: BTreeMap<Key, Value>,
-    // column data <(Vector, Timestamp), Vector>
     data: BTreeMap<Key, Value>,
-    // column lock <(Vector, Timestamp), Vector>
     lock: BTreeMap<Key, Value>,
 }
 
 #[derive(Debug, Clone)]
 struct Write(Vec<u8>, Vec<u8>);
 
-#[derive(Clone)]
-pub struct MemoryStorageTransaction {
-    start_ts: u64,
-    data: Arc<Mutex<KvTable>>,
-    writes: Vec<Write>,
-}
-
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
-    transactions: Arc<Mutex<HashMap<u64, MemoryStorageTransaction>>>,
 }
+
+#[derive(Clone)]
+pub struct TimestampService;

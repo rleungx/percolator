@@ -2,10 +2,10 @@ use crate::msg::{CommitRequest, GetRequest, GetTimestamp, PrewriteRequest};
 use crate::service::{TSOClient, TransactionClient};
 use crate::Write;
 
-use std::thread;
 use std::time::Duration;
 
 use futures::Future;
+use futures_timer::Delay;
 use labrpc::*;
 
 #[derive(Clone, Default)]
@@ -43,7 +43,7 @@ impl Client {
                     return Ok(res.ts);
                 }
                 Err(_) => {
-                    thread::sleep(Duration::from_millis(backoff));
+                    Delay::new(Duration::from_millis(backoff)).wait().unwrap();
                     backoff *= 2;
                     continue;
                 }
@@ -59,7 +59,7 @@ impl Client {
                 println!("get timestamp timeout");
                 return;
             }
-            Err(_) => panic!("unexpected behavior"),
+            _ => panic!("unexpected behavior"),
         };
         self.txn = Transaction {
             start_ts,
@@ -82,7 +82,7 @@ impl Client {
                     return Ok(res.value);
                 }
                 Err(_) => {
-                    thread::sleep(Duration::from_millis(backoff));
+                    Delay::new(Duration::from_millis(backoff)).wait().unwrap();
                     backoff *= 2;
                     continue;
                 }
@@ -145,7 +145,7 @@ impl Client {
                 println!("get timestamp timeout");
                 return false;
             }
-            Err(_) => panic!("unexpected behavior"),
+            _ => panic!("unexpected behavior"),
         };
         // Commit primary first.
         if self

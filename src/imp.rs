@@ -25,20 +25,12 @@ impl KvTable {
             None => (key.clone(), std::u64::MAX),
             Some(ts) => (key.clone(), ts),
         };
-        match column {
-            Column::Write => {
-                let mut r = self.write.range(range_start..=range_end);
-                r.next_back()
-            }
-            Column::Data => {
-                let mut r = self.data.range(range_start..=range_end);
-                r.next_back()
-            }
-            Column::Lock => {
-                let mut r = self.lock.range(range_start..=range_end);
-                r.next_back()
-            }
-        }
+        let mut r = match column {
+            Column::Write => self.write.range(range_start..=range_end),
+            Column::Data => self.data.range(range_start..=range_end),
+            Column::Lock => self.lock.range(range_start..=range_end),
+        };
+        r.next_back()
     }
 
     #[inline]
@@ -266,25 +258,5 @@ impl Service for TimestampService {
             ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
         };
         Box::new(futures::future::result(Ok(ts)))
-    }
-}
-
-impl Value {
-    fn unwrap_ts(self) -> u64 {
-        match self {
-            Value::Timestamp(ts) => ts,
-            _ => {
-                panic!("something wrong!");
-            }
-        }
-    }
-
-    fn unwrap_vec(self) -> Vec<u8> {
-        match self {
-            Value::Vector(val) => val,
-            _ => {
-                panic!("something wrong!");
-            }
-        }
     }
 }
