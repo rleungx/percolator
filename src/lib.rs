@@ -68,5 +68,5 @@ pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
 }
 
-#[derive(Clone)]
-pub struct TimestampService;
+#[derive(Clone, Default)]
+pub struct TimestampOracle {}

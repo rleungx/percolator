@@ -1,4 +1,4 @@
-use crate::msg::{CommitRequest, GetRequest, GetTimestamp, PrewriteRequest};
+use crate::msg::{CommitRequest, GetRequest, PrewriteRequest, TimestampRequest};
 use crate::service::{TSOClient, TransactionClient};
 use crate::Write;
 
@@ -38,7 +38,7 @@ impl Client {
     pub fn get_timestamp(&self) -> Result<u64> {
         let mut backoff = BACKOFF_TIME_MS;
         for _i in 0..RETRY_TIMES {
-            match self.tso_client.get_timestamp(&GetTimestamp {}).wait() {
+            match self.tso_client.get_timestamp(&TimestampRequest {}).wait() {
                 Ok(res) => {
                     return Ok(res.ts);
                 }

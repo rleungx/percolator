@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::service::{add_transaction_service, add_tso_service, TSOClient, TransactionClient};
-use crate::{MemoryStorage, TimestampService};
+use crate::{MemoryStorage, TimestampOracle};
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -48,7 +48,8 @@ fn init(num_clinet: usize) -> (Network, Vec<Client>, Arc<CommitHooks>) {
     let mut tso_server_builder = ServerBuilder::new(tso_server_name.to_owned());
     let server_name = "server";
     let mut server_builder = ServerBuilder::new(server_name.to_owned());
-    add_tso_service(TimestampService, &mut tso_server_builder).unwrap();
+    let tso: TimestampOracle = Default::default();
+    add_tso_service(tso, &mut tso_server_builder).unwrap();
     let store: MemoryStorage = Default::default();
     add_transaction_service(store, &mut server_builder).unwrap();
     let tso_server = tso_server_builder.build();

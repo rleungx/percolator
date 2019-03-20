@@ -251,10 +251,10 @@ impl MemoryStorage {
     }
 }
 
-impl Service for TimestampService {
-    fn get_timestamp(&self, _input: GetTimestamp) -> RpcFuture<Timestamp> {
+impl timestamp::Service for TimestampOracle {
+    fn get_timestamp(&self, _: TimestampRequest) -> RpcFuture<TimestampResponse> {
         let now = time::SystemTime::now();
-        let ts = Timestamp {
+        let ts = TimestampResponse {
             ts: now.duration_since(time::UNIX_EPOCH).expect("").as_nanos() as u64,
         };
         Box::new(futures::future::result(Ok(ts)))

@@ -7,9 +7,9 @@ message Write {
     bytes value = 2;
 }
 
-message GetTimestamp {}
+message TimestampRequest {}
 
-message Timestamp {
+message TimestampResponse {
     uint64 ts = 1;
 }
 

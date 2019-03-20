@@ -1,11 +1,11 @@
 use crate::msg::{
-    CommitRequest, CommitResponse, GetRequest, GetResponse, GetTimestamp, PrewriteRequest,
-    PrewriteResponse, Timestamp,
+    CommitRequest, CommitResponse, GetRequest, GetResponse, PrewriteRequest, PrewriteResponse,
+    TimestampRequest, TimestampResponse,
 };
 
 service! {
     service timestamp {
-        rpc get_timestamp(GetTimestamp) returns (Timestamp);
+        rpc get_timestamp(TimestampRequest) returns (TimestampResponse);
     }
 }
 
