@@ -4,8 +4,10 @@ extern crate labcodec;
 #[macro_use]
 extern crate labrpc;
 
-#[allow(dead_code)]
+// After you finish the implementation, `#[allow(unused)]` should be removed.
+#[allow(dead_code, unused)]
 mod client;
+#[allow(unused)]
 mod imp;
 mod service;
 #[cfg(test)]
@@ -17,7 +19,6 @@ mod msg {
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time;
 
 type Key = (Vec<u8>, u64);
 
@@ -31,26 +32,6 @@ pub enum Column {
 pub enum Value {
     Timestamp(u64),
     Vector(Vec<u8>),
-}
-
-impl Value {
-    fn unwrap_ts(self) -> u64 {
-        match self {
-            Value::Timestamp(ts) => ts,
-            _ => {
-                panic!("Something wrong! It should be used for Timestamp");
-            }
-        }
-    }
-
-    fn unwrap_vec(self) -> Vec<u8> {
-        match self {
-            Value::Vector(val) => val,
-            _ => {
-                panic!("Something wrong! It should be used for Vector");
-            }
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -69,4 +50,6 @@ pub struct MemoryStorage {
 }
 
 #[derive(Clone, Default)]
-pub struct TimestampOracle {}
+pub struct TimestampOracle {
+    // You definitions here if needed.
+}
