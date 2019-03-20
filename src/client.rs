@@ -95,7 +95,7 @@ impl Client {
         self.txn.writes.push(Write(key, value));
     }
 
-    pub fn commit(&self) -> bool {
+    pub fn commit(&self) -> Result<bool> {
         let primary = &self.txn.writes[0];
         let secondaries = &self.txn.writes[1..];
 
@@ -115,7 +115,7 @@ impl Client {
             .wait()
             .is_err()
         {
-            return false;
+            return Ok(false);
         }
 
         for w in secondaries {
@@ -135,20 +135,13 @@ impl Client {
                 .wait()
                 .is_err()
             {
-                return false;
+                return Ok(false);
             }
         }
 
-        let commit_ts = match self.get_timestamp() {
-            Ok(ts) => ts,
-            Err(Error::Timeout) => {
-                println!("get timestamp timeout");
-                return false;
-            }
-            _ => panic!("unexpected behavior"),
-        };
+        let commit_ts = self.get_timestamp()?;
         // Commit primary first.
-        if self
+        match self
             .txn_client
             .commit(&CommitRequest {
                 is_primary: true,
@@ -160,9 +153,16 @@ impl Client {
                 }),
             })
             .wait()
-            .is_err()
         {
-            return false;
+            Ok(_) => {}
+            Err(Error::Other(e)) => {
+                if e == "resphook" {
+                    return Err(Error::Other("resphook".to_owned()));
+                } else {
+                    return Ok(false);
+                }
+            }
+            Err(_) => return Ok(false),
         }
 
         // Second phase: write out write records for secondary cells.
@@ -181,6 +181,6 @@ impl Client {
                 .wait();
         }
 
-        true
+        Ok(true)
     }
 }

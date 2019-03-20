@@ -120,7 +120,7 @@ fn test_predicate_many_preceders_read_predicates() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -129,7 +129,7 @@ fn test_predicate_many_preceders_read_predicates() {
     let mut client2 = clients[2].to_owned();
     client2.begin();
     client2.set(b"3".to_vec(), b"30".to_vec());
-    assert!(client2.commit());
+    assert_eq!(client2.commit(), Ok(true));
 
     assert_eq!(client1.get(b"3".to_vec()), Ok(Vec::new()));
 }
@@ -143,7 +143,7 @@ fn test_predicate_many_preceders_write_predicates() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -156,8 +156,8 @@ fn test_predicate_many_preceders_write_predicates() {
     assert_eq!(client1.get(b"2".to_vec()), Ok(b"20".to_vec()));
 
     client2.set(b"2".to_vec(), b"40".to_vec());
-    assert!(client1.commit());
-    assert!(!client2.commit());
+    assert_eq!(client1.commit(), Ok(true));
+    assert_eq!(client2.commit(), Ok(false));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn test_lost_update() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -182,8 +182,8 @@ fn test_lost_update() {
 
     client1.set(b"1".to_vec(), b"11".to_vec());
     client2.set(b"1".to_vec(), b"11".to_vec());
-    assert!(client1.commit());
-    assert!(!client2.commit());
+    assert_eq!(client1.commit(), Ok(true));
+    assert_eq!(client2.commit(), Ok(false));
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn test_read_skew_read_only() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -209,7 +209,7 @@ fn test_read_skew_read_only() {
 
     client2.set(b"1".to_vec(), b"12".to_vec());
     client2.set(b"2".to_vec(), b"18".to_vec());
-    assert!(client2.commit());
+    assert_eq!(client2.commit(), Ok(true));
 
     assert_eq!(client1.get(b"2".to_vec()), Ok(b"20".to_vec()));
 }
@@ -223,7 +223,7 @@ fn test_read_skew_predicate_dependencies() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -235,7 +235,7 @@ fn test_read_skew_predicate_dependencies() {
     assert_eq!(client1.get(b"2".to_vec()), Ok(b"20".to_vec()));
 
     client2.set(b"3".to_vec(), b"30".to_vec());
-    assert!(client2.commit());
+    assert_eq!(client2.commit(), Ok(true));
 
     assert_eq!(client1.get(b"3".to_vec()), Ok(Vec::new()));
 }
@@ -249,7 +249,7 @@ fn test_read_skew_write_predicate() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -263,10 +263,10 @@ fn test_read_skew_write_predicate() {
 
     client2.set(b"1".to_vec(), b"12".to_vec());
     client2.set(b"2".to_vec(), b"18".to_vec());
-    assert!(client2.commit());
+    assert_eq!(client2.commit(), Ok(true));
 
     client1.set(b"2".to_vec(), b"30".to_vec());
-    assert!(!client1.commit());
+    assert_eq!(client1.commit(), Ok(false));
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn test_write_skew() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -294,8 +294,8 @@ fn test_write_skew() {
     client1.set(b"1".to_vec(), b"11".to_vec());
     client2.set(b"2".to_vec(), b"21".to_vec());
 
-    assert!(client1.commit());
-    assert!(client2.commit());
+    assert_eq!(client1.commit(), Ok(true));
+    assert_eq!(client2.commit(), Ok(true));
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn test_anti_dependency_cycles() {
     client0.begin();
     client0.set(b"1".to_vec(), b"10".to_vec());
     client0.set(b"2".to_vec(), b"20".to_vec());
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -318,8 +318,8 @@ fn test_anti_dependency_cycles() {
     client1.set(b"3".to_vec(), b"30".to_vec());
     client2.set(b"4".to_vec(), b"42".to_vec());
 
-    assert!(client1.commit());
-    assert!(client2.commit());
+    assert_eq!(client1.commit(), Ok(true));
+    assert_eq!(client2.commit(), Ok(true));
 
     let mut client3 = clients[3].to_owned();
     client3.begin();
@@ -337,7 +337,7 @@ fn test_commit_primary_drop_secondary_requests() {
     client0.set(b"4".to_vec(), b"40".to_vec());
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_req.store(true, Ordering::Relaxed);
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -356,7 +356,7 @@ fn test_commit_primary_success() {
     client0.set(b"4".to_vec(), b"40".to_vec());
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_req.store(true, Ordering::Relaxed);
-    assert!(client0.commit());
+    assert_eq!(client0.commit(), Ok(true));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -375,7 +375,7 @@ fn test_commit_primary_success_without_response() {
     client0.set(b"4".to_vec(), b"40".to_vec());
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_resp.store(true, Ordering::Relaxed);
-    assert!(!client0.commit());
+    assert_eq!(client0.commit(), Err(Error::Other("resphook".to_owned())));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
@@ -395,7 +395,7 @@ fn test_commit_primary_fail() {
     client0.set(b"5".to_vec(), b"50".to_vec());
     hook.drop_req.store(true, Ordering::Relaxed);
     hook.fail_primary.store(true, Ordering::Relaxed);
-    assert!(!client0.commit());
+    assert_eq!(client0.commit(), Ok(false));
 
     let mut client1 = clients[1].to_owned();
     client1.begin();
