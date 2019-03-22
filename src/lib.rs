@@ -13,6 +13,7 @@ mod service;
 #[cfg(test)]
 mod tests;
 
+// This is related to protobuf as described in `msg.proto`.
 mod msg {
     include!(concat!(env!("OUT_DIR"), "/msg.rs"));
 }
@@ -20,22 +21,23 @@ mod msg {
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+// Key is a tuple (raw key, timestamp).
 type Key = (Vec<u8>, u64);
 
-pub enum Column {
+enum Column {
     Write,
     Data,
     Lock,
 }
 
 #[derive(Clone, PartialEq)]
-pub enum Value {
+enum Value {
     Timestamp(u64),
     Vector(Vec<u8>),
 }
 
 #[derive(Clone, Default)]
-pub struct KvTable {
+struct KvTable {
     write: BTreeMap<Key, Value>,
     data: BTreeMap<Key, Value>,
     lock: BTreeMap<Key, Value>,
@@ -45,11 +47,11 @@ pub struct KvTable {
 struct Write(Vec<u8>, Vec<u8>);
 
 #[derive(Clone, Default)]
-pub struct MemoryStorage {
+struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
 }
 
 #[derive(Clone, Default)]
-pub struct TimestampOracle {
+struct TimestampOracle {
     // You definitions here if needed.
 }
