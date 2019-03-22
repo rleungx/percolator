@@ -21,14 +21,14 @@ use std::time;
 
 type Key = (Vec<u8>, u64);
 
-pub enum Column {
+enum Column {
     Write,
     Data,
     Lock,
 }
 
 #[derive(Clone, PartialEq)]
-pub enum Value {
+enum Value {
     Timestamp(u64),
     Vector(Vec<u8>),
 }
@@ -54,7 +54,7 @@ impl Value {
 }
 
 #[derive(Clone, Default)]
-pub struct KvTable {
+struct KvTable {
     write: BTreeMap<Key, Value>,
     data: BTreeMap<Key, Value>,
     lock: BTreeMap<Key, Value>,
@@ -64,9 +64,9 @@ pub struct KvTable {
 struct Write(Vec<u8>, Vec<u8>);
 
 #[derive(Clone, Default)]
-pub struct MemoryStorage {
+struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
 }
 
 #[derive(Clone, Default)]
-pub struct TimestampOracle {}
+struct TimestampOracle {}

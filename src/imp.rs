@@ -73,7 +73,7 @@ impl KvTable {
     }
 
     #[inline]
-    pub fn get_uncommitted_keys(&self, ts: u64, primary: Vec<u8>) -> Vec<Key> {
+    fn get_uncommitted_keys(&self, ts: u64, primary: Vec<u8>) -> Vec<Key> {
         let mut keys: Vec<Key> = vec![];
         for (map_key, v) in self.lock.iter() {
             if (*v).clone().unwrap_vec() == primary && map_key.1 == ts {
@@ -85,7 +85,7 @@ impl KvTable {
     }
 
     #[inline]
-    pub fn get_commit_ts(&self, ts: u64, primary: Vec<u8>) -> Option<u64> {
+    fn get_commit_ts(&self, ts: u64, primary: Vec<u8>) -> Option<u64> {
         for (map_key, v) in self.write.iter() {
             if (*v).clone().unwrap_ts() == ts && map_key.0 == primary {
                 return Some(map_key.1);
@@ -99,7 +99,7 @@ impl KvTable {
 impl transaction::Service for MemoryStorage {
     fn get(&self, req: GetRequest) -> RpcFuture<GetResponse> {
         let key = req.key.clone();
-        let snapshot = self.data.lock().unwrap().clone();
+        let snapshot = self.get_snapshot();
 
         if snapshot
             .read(key.clone(), Column::Lock, None, Some(req.start_ts))
@@ -218,6 +218,10 @@ impl transaction::Service for MemoryStorage {
 }
 
 impl MemoryStorage {
+    fn get_snapshot(&self) -> KvTable {
+        self.data.lock().unwrap().clone()
+    }
+
     fn back_off_maybe_clean_up_lock(&self, start_ts: u64, key: Vec<u8>) {
         let mut kv_data = self.data.lock().unwrap();
         if let Some(r) = kv_data.read(key.clone(), Column::Lock, None, Some(start_ts)) {

@@ -9,7 +9,7 @@ use futures_timer::Delay;
 use labrpc::*;
 
 #[derive(Clone, Default)]
-pub struct Transaction {
+struct Transaction {
     start_ts: u64,
     writes: Vec<Write>,
 }
