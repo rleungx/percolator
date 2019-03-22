@@ -1,6 +1,6 @@
 use crate::client::Client;
+use crate::server::{MemoryStorage, TimestampOracle};
 use crate::service::{add_transaction_service, add_tso_service, TSOClient, TransactionClient};
-use crate::{MemoryStorage, TimestampOracle};
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
