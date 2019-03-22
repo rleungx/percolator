@@ -44,6 +44,8 @@ pub enum Column {
     Lock,
 }
 
+// KvTable is used to simulate Google's Bigtable.
+// It provides three column: Write, Data, and Lock.
 #[derive(Clone, Default)]
 pub struct KvTable {
     write: BTreeMap<Key, Value>,
@@ -81,6 +83,8 @@ impl KvTable {
     }
 }
 
+// MemoryStorage is used to wrap a KvTable.
+// You may need to get a snapshot from it.
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
     data: Arc<Mutex<KvTable>>,
