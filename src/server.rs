@@ -45,7 +45,7 @@ pub enum Column {
 }
 
 // KvTable is used to simulate Google's Bigtable.
-// It provides three column: Write, Data, and Lock.
+// It provides three columns: Write, Data, and Lock.
 #[derive(Clone, Default)]
 pub struct KvTable {
     write: BTreeMap<Key, Value>,

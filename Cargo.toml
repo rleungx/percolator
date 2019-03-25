@@ -15,3 +15,6 @@ labcodec = { git = "https://github.com/overvenus/labs6824.git" }
 
 [build-dependencies]
 prost-build = "0.4.0"
+
+[dev-dependencies]
+env_logger = "0.6"

@@ -41,7 +41,14 @@ impl RpcHooks for CommitHooks {
     }
 }
 
+fn init_logger() {
+    use std::sync::Once;
+    static LOGGER_INIT: Once = Once::new();
+    LOGGER_INIT.call_once(env_logger::init);
+}
+
 fn init(num_clinet: usize) -> (Network, Vec<Client>, Arc<CommitHooks>) {
+    init_logger();
     let mut clients = vec![];
     let rn = Network::new();
     let tso_server_name = "tso_server";
